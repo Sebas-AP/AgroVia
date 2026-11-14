@@ -1,0 +1,55 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /plots/{plotId} {
+      allow read, write: if request.auth != null && request.auth.uid == resource.data.ownerUid;
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.ownerUid;
+
+      match /{subcollection=**} {
+        allow read, write: if request.auth != null &&
+          request.auth.uid == get(/databases/$(database)/documents/plots/$(plotId)).data.ownerUid;
+      }
+    }
+
+    match /cropCatalog/{cropId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /cells/{cellId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+
+      match /series/{seriesId} {
+        allow read: if request.auth != null;
+        allow write: if false;
+      }
+    }
+
+    match /prices/{cropId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+
+      match /snapshots/{snapshotId} {
+        allow read: if request.auth != null;
+        allow write: if false;
+      }
+    }
+
+    match /validations/{validationId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /strategies/{strategyId} {
+      allow read: if request.auth != null &&
+        request.auth.uid == get(/databases/$(database)/documents/plots/$(resource.data.plotId)).data.ownerUid;
+      allow write: if false;
+    }
+
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}
