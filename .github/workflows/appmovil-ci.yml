@@ -1,0 +1,15 @@
+name: AppMovil CI
+on:
+  push:
+    paths: ["AppMovil/**"]
+  pull_request:
+    paths: ["AppMovil/**"]
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        if: hashFiles('AppMovil/pubspec.yaml') != ''
+      - run: scripts/lint-folder.sh AppMovil pubspec.yaml flutter analyze
+      - run: scripts/lint-folder.sh AppMovil pubspec.yaml flutter test
