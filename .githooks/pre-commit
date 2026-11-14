@@ -3,8 +3,8 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-if git diff --cached --name-status -- assets/protected | grep -qE '^[MD]'; then
-  echo "ERROR: files under assets/protected must never be modified or deleted (add-only)." >&2
+if git diff --cached --no-renames --name-status -- assets/protected | grep -qvE '^A'; then
+  echo "ERROR: files under assets/protected must never be modified, deleted, or renamed (add-only)." >&2
   exit 1
 fi
 
@@ -12,7 +12,7 @@ staged="$(git diff --cached --name-only)"
 
 check_folder() {
   local folder="$1"; shift
-  if echo "$staged" | grep -q "^$folder/"; then
+  if grep -q "^$folder/" <<<"$staged"; then
     scripts/lint-folder.sh "$folder" "$@"
   fi
 }

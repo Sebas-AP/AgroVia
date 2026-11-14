@@ -13,5 +13,6 @@ jobs:
         with:
           python-version: "3.12"
         if: hashFiles('Modelo/requirements.txt') != ''
+      - run: scripts/lint-folder.sh Modelo requirements.txt pip install -r requirements.txt ruff pytest
       - run: scripts/lint-folder.sh Modelo requirements.txt ruff check .
       - run: scripts/lint-folder.sh Modelo requirements.txt pytest
