@@ -29,4 +29,30 @@ describe('plots security rules', () => {
     const db = testEnv.authenticatedContext('owner-1').firestore()
     await assertFails(db.doc('cropCatalog/corn').set({ name: 'Corn' }))
   })
+
+  it('blocks the owner from writing provenance fields on their own plot\'s static profile', async () => {
+    const ownerDb = testEnv.authenticatedContext('owner-1').firestore()
+    await assertFails(ownerDb.doc('plots/plot-1/static/profile').set({ slopeDegrees: 5, source: 'fake' }))
+  })
+
+  it('blocks the owner from writing their own plot\'s indicators', async () => {
+    const ownerDb = testEnv.authenticatedContext('owner-1').firestore()
+    await assertFails(ownerDb.doc('plots/plot-1/indicators/2026-01').set({ rainAccumMm: 999 }))
+  })
+
+  it('blocks the owner from reassigning ownerUid on update', async () => {
+    const ownerDb = testEnv.authenticatedContext('owner-1').firestore()
+    await assertFails(ownerDb.doc('plots/plot-1').update({ ownerUid: 'owner-2' }))
+  })
+
+  it('blocks a client from writing a strategy', async () => {
+    const db = testEnv.authenticatedContext('owner-1').firestore()
+    await assertFails(db.doc('strategies/strategy-1').set({ plotId: 'plot-1', id: 'current' }))
+  })
+
+  it('still lets the owner read and write their own seasons and business records', async () => {
+    const ownerDb = testEnv.authenticatedContext('owner-1').firestore()
+    await assertSucceeds(ownerDb.doc('plots/plot-1/seasons/2025').set({ year: 2025, crop: 'corn' }))
+    await assertSucceeds(ownerDb.doc('plots/plot-1/business/current').set({ crop: 'corn', area: 2 }))
+  })
 })

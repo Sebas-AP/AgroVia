@@ -38,9 +38,32 @@ describe('computeIndicators', () => {
     expect(result.rainAccumMm).toBe(15)
   })
 
-  it('stamps engineVersion and a non-empty sources array', () => {
+  it('drops a missing precipitation day entirely rather than zero-filling it (sum alone cannot tell these apart)', () => {
+    // Day 1 and day 3 both have rainMm < 1 (dry); day 2 is missing. If day 2 were zero-filled
+    // (0mm, also < 1), the dry spell would run all 3 days. Dropping it instead leaves only 2
+    // adjacent entries in the filtered array, so the spell can only be 2 days long.
+    const input = buildInput()
+    input.climate[0].values.PRECTOTCORR = 0.2
+    input.climate[2].values.PRECTOTCORR = 0.2
+    const result = computeIndicators(input)
+    expect(result.maxDrySpellDays).toBe(2)
+  })
+
+  it('stamps engineVersion and a non-empty sources array that preserves version/origin, not just source/product', () => {
     const result = computeIndicators(buildInput())
     expect(result.engineVersion).toBeTruthy()
     expect(result.sources.length).toBeGreaterThan(0)
+    expect(result.sources[0]).toMatch(/v1/)
+    expect(result.sources[0]).toMatch(/simulated/)
+  })
+
+  it('reports airTempAvg as null, never zero, when no climate data covers the target month', () => {
+    const input = buildInput()
+    input.month = '2026-02' // no climate/ndvi entries fall in this month
+    const result = computeIndicators(input)
+    expect(result.airTempAvg).toBeNull()
+    expect(result.airTempMax).toBeNull()
+    expect(result.airTempMin).toBeNull()
+    expect(result.relativeHumidityAvg).toBeNull()
   })
 })

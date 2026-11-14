@@ -54,10 +54,10 @@ export interface PlotIndicators {
   moistureAnomalyPctl: number | null
   soilTempAvg7d: number | null
   soilTempAvg10d: number | null
-  airTempAvg: number
-  airTempMax: number
-  airTempMin: number
-  relativeHumidityAvg: number
+  airTempAvg: number | null
+  airTempMax: number | null
+  airTempMin: number | null
+  relativeHumidityAvg: number | null
   frostDays: number
   lastFrostDate: string | null
   heatStressDays: number

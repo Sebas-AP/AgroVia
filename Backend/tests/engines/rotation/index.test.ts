@@ -42,4 +42,24 @@ describe('generateStrategies', () => {
     expect(lowWaterStrategy(lowWaterPriority).scores.water)
       .toBeGreaterThan(lowWaterStrategy(highWaterPriority).scores.water)
   })
+
+  it('fills benefits and risks for a strategy whose crops are in the catalog', () => {
+    const strategies = generateStrategies(demoRotationInput())
+    const alternative = strategies.find((s) => s.type === 'alternative')!
+    expect(alternative.benefits.length).toBeGreaterThan(0)
+    expect(alternative.risks.length).toBeGreaterThan(0)
+  })
+
+  it('flags unreliable scores when no crop in the sequence matched the catalog', () => {
+    const input = demoRotationInput({ seasons: [{ year: 2025, crop: 'unknown-crop' }] })
+    const current = generateStrategies(input).find((s) => s.type === 'current')!
+    expect(current.infoGaps.join(' ')).toMatch(/score/i)
+  })
+
+  it('generates alternatives from every compatible pair, not just adjacent ones', () => {
+    // 3 compatible crops (corn is excluded under low water availability) means 3 distinct
+    // pairs, not 2 — this plot should see current + 3 alternatives.
+    const strategies = generateStrategies(demoRotationInput())
+    expect(strategies.filter((s) => s.type === 'alternative').length).toBe(3)
+  })
 })

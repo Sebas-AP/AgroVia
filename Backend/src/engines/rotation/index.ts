@@ -35,6 +35,58 @@ function lookupCrops(
   return found
 }
 
+function buildBenefits(crops: CropCatalogEntry[]): string[] {
+  const benefits: string[] = []
+  if (crops.some((c) => c.fixesNitrogen)) {
+    benefits.push('Includes a nitrogen-fixing crop, reducing the fertilizer this rotation needs.')
+  }
+  if (crops.some((c) => c.organicMatterContribution === 'high')) {
+    benefits.push('Includes a crop with a high organic-matter contribution, improving soil structure over time.')
+  }
+  if (crops.some((c) => c.droughtTolerance === 'high')) {
+    benefits.push('Includes a drought-tolerant crop, a good match for this plot\'s low declared water availability.')
+  }
+  return benefits
+}
+
+function buildRisks(crops: CropCatalogEntry[], indicators: PlotIndicators): string[] {
+  const risks: string[] = []
+  for (const crop of crops) {
+    for (const pest of crop.pestRisk) {
+      risks.push(`${crop.name}: watch for ${pest}.`)
+    }
+  }
+  if (indicators.frostDays > 0) {
+    risks.push(`${indicators.frostDays} frost day(s) recorded this period — review cold-sensitive crops in this sequence.`)
+  }
+  if (indicators.heatStressDays > 0) {
+    risks.push(`${indicators.heatStressDays} heat-stress day(s) recorded this period — review heat-sensitive crops in this sequence.`)
+  }
+  return risks
+}
+
+function buildIndicatorEvidence(indicators: PlotIndicators): RotationStrategy['evidence'] {
+  const asOf = indicators.asOf
+  const provenanceFor = (label: string): RotationStrategy['evidence'][number] => ({
+    label,
+    value: '', // filled below per field
+    unit: '',
+    period: asOf,
+    provenance: {
+      source: indicators.sources[0] ?? 'indicators engine', product: 'monthly indicators',
+      version: indicators.engineVersion, asOf, latencyDays: 0, kind: 'estimated', origin: 'simulated',
+    },
+  })
+  return [
+    { ...provenanceFor('Accumulated rainfall'), value: String(indicators.rainAccumMm), unit: 'mm' },
+    {
+      ...provenanceFor('Root-zone moisture anomaly'),
+      value: indicators.moistureAnomalyPctl === null ? 'unknown' : String(indicators.moistureAnomalyPctl),
+      unit: 'percentile',
+    },
+  ]
+}
+
 function buildStrategy(
   id: string,
   type: RotationStrategy['type'],
@@ -47,6 +99,9 @@ function buildStrategy(
   priorities: PlotPriorities,
 ): RotationStrategy {
   const crops = lookupCrops(sequence.map((s) => s.crop), catalog, infoGaps)
+  if (crops.length === 0) {
+    infoGaps.push('No crop in this sequence matched the catalog — the water/soil scores below are not meaningful (shown as 0).')
+  }
   const { scores, totalScore } = combineScores(crops, sequence, staticProfile, indicators, priorities)
   const sequenceText = sequence.map((s) => `${s.crop} (${s.year})`).join(' -> ')
 
@@ -55,19 +110,20 @@ function buildStrategy(
     type,
     sequence,
     rationale,
-    evidence: [],
-    benefits: [],
-    // Filled by the rotations route (Task 10), which also has the economics engine (Task 9) and
-    // the farmer's real business inputs — neither is available at this layer.
+    evidence: buildIndicatorEvidence(indicators),
+    benefits: buildBenefits(crops),
+    // Price-based evidence/economics are filled by the rotations route (Task 10), which also has
+    // the economics engine (Task 9) and the farmer's real business inputs — neither is available
+    // at this layer. summary.avgMargin is likewise filled there once economics exist.
     economics: [],
     infoGaps,
-    risks: [],
+    risks: buildRisks(crops, indicators),
     scores,
     totalScore,
     summary: {
       sequenceText,
       shortRationale: rationale.slice(0, 120),
-      avgMargin: 0, // ASSUMPTION: real margin needs Task 9's economics engine; filled by the route
+      avgMargin: 0,
     },
     engineVersion: ENGINE_VERSION,
     catalogVersion: CATALOG_VERSION,
@@ -103,18 +159,25 @@ function buildAlternativeStrategies(input: GenerateStrategiesInput): RotationStr
   const startYear = nextYearAfter(input.seasons)
   const alternatives: RotationStrategy[] = []
 
+  // Every distinct pair of compatible crops, not just adjacent ones in the water-sorted list —
+  // with only 2-3 candidates typical for this plot, adjacent-only pairing left the alternative
+  // pool too thin (and made sequence collisions structurally impossible to exercise).
+  let isFirstPair = true
   for (let i = 0; i < compatible.length - 1; i++) {
-    const [cropA, cropB] = [compatible[i], compatible[i + 1]]
-    const sequence = [
-      { year: startYear, crop: cropA.id },
-      { year: startYear + 1, crop: cropB.id },
-    ]
-    const id = i === 0 ? 'alt-low-water' : `alt-${cropA.id}-${cropB.id}`
-    alternatives.push(buildStrategy(
-      id, 'alternative', sequence,
-      `Alternates ${cropA.name} and ${cropB.name}, both compatible with this plot's declared water availability.`,
-      [], input.catalog, input.staticProfile, input.indicators, input.priorities,
-    ))
+    for (let j = i + 1; j < compatible.length; j++) {
+      const [cropA, cropB] = [compatible[i], compatible[j]]
+      const sequence = [
+        { year: startYear, crop: cropA.id },
+        { year: startYear + 1, crop: cropB.id },
+      ]
+      const id = isFirstPair ? 'alt-low-water' : `alt-${cropA.id}-${cropB.id}`
+      isFirstPair = false
+      alternatives.push(buildStrategy(
+        id, 'alternative', sequence,
+        `Alternates ${cropA.name} and ${cropB.name}, both compatible with this plot's declared water availability.`,
+        [], input.catalog, input.staticProfile, input.indicators, input.priorities,
+      ))
+    }
   }
 
   return alternatives

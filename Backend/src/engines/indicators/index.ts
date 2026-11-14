@@ -107,14 +107,15 @@ export function computeIndicators(input: ComputeIndicatorsInput): PlotIndicators
   const numericValuesOf = (key: string): number[] =>
     monthClimate.map((d) => d.values[key]).filter((v): v is number => typeof v === 'number')
 
-  const maxOrZero = (values: number[]): number => (values.length === 0 ? 0 : Math.max(...values))
-  const minOrZero = (values: number[]): number => (values.length === 0 ? 0 : Math.min(...values))
+  const averageOrNull = (values: number[]): number | null => (values.length === 0 ? null : average(values))
+  const maxOrNull = (values: number[]): number | null => (values.length === 0 ? null : Math.max(...values))
+  const minOrNull = (values: number[]): number | null => (values.length === 0 ? null : Math.min(...values))
 
   const monthlyAirTemp = {
-    avg: average(numericValuesOf('T2M')),
-    max: maxOrZero(numericValuesOf('T2M_MAX')),
-    min: minOrZero(numericValuesOf('T2M_MIN')),
-    rh: average(numericValuesOf('RH2M')),
+    avg: averageOrNull(numericValuesOf('T2M')),
+    max: maxOrNull(numericValuesOf('T2M_MAX')),
+    min: minOrNull(numericValuesOf('T2M_MIN')),
+    rh: averageOrNull(numericValuesOf('RH2M')),
   }
 
   const monthlyNdvi = resampleToMonthly(
@@ -137,7 +138,7 @@ export function computeIndicators(input: ComputeIndicatorsInput): PlotIndicators
     ...climate.map((d) => d.provenance),
     ...soilMoisture.map((d) => d.provenance),
     ...ndvi.map((d) => d.provenance),
-  ].map((p) => `${p.source} (${p.product})`)
+  ].map((p) => `${p.source} (${p.product}) v${p.version} asOf=${p.asOf} latencyDays=${p.latencyDays} origin=${p.origin}`)
 
   return {
     rainAccumMm: rainMetrics.rainAccumMm,

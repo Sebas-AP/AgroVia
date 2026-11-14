@@ -3,12 +3,31 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /plots/{plotId} {
-      allow read, write: if request.auth != null && request.auth.uid == resource.data.ownerUid;
-      allow create: if request.auth != null && request.auth.uid == request.resource.data.ownerUid;
-
-      match /{subcollection=**} {
-        allow read, write: if request.auth != null &&
+      function isOwner() {
+        return request.auth != null &&
           request.auth.uid == get(/databases/$(database)/documents/plots/$(plotId)).data.ownerUid;
+      }
+
+      allow read: if request.auth != null && request.auth.uid == resource.data.ownerUid;
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.ownerUid;
+      allow update: if request.auth != null && request.auth.uid == resource.data.ownerUid &&
+        request.resource.data.ownerUid == resource.data.ownerUid;
+      allow delete: if request.auth != null && request.auth.uid == resource.data.ownerUid;
+
+      // The farmer's own inputs: freely owner-read/write.
+      match /seasons/{seasonId} { allow read, write: if isOwner(); }
+      match /events/{eventId} { allow read, write: if isOwner(); }
+      match /business/{docId} { allow read, write: if isOwner(); }
+
+      // Server/engine-computed data: owner may read, but never write — these carry provenance
+      // fields (source, product, version, asOf, engineVersion) that no client may set.
+      match /static/{docId} {
+        allow read: if isOwner();
+        allow write: if false;
+      }
+      match /indicators/{period} {
+        allow read: if isOwner();
+        allow write: if false;
       }
     }
 

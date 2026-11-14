@@ -81,15 +81,47 @@ const BUSINESS_NUMERIC_FIELDS = [
   'area', 'seed', 'fertilizer', 'water', 'labor', 'machinery', 'transport', 'other', 'yieldTonHa', 'priceTon',
 ]
 
-function parseBusinessInputs(body: Record<string, unknown>): BusinessInputs {
+type BusinessValidation = { ok: true; value: BusinessInputs } | { ok: false; errors: string[] }
+
+function validateBusinessInputs(body: Record<string, unknown>): BusinessValidation {
   const errors = numericFieldErrors(body, BUSINESS_NUMERIC_FIELDS)
   if (typeof body.crop !== 'string' || body.crop === '') {
     errors.push('crop must be a non-empty string')
   }
   if (errors.length > 0) {
-    throw badRequest('Invalid business inputs.', errors)
+    return { ok: false, errors }
   }
-  return body as unknown as BusinessInputs
+  return { ok: true, value: body as unknown as BusinessInputs }
+}
+
+function parseBusinessInputs(body: Record<string, unknown>): BusinessInputs {
+  const result = validateBusinessInputs(body)
+  if (!result.ok) {
+    throw badRequest('Invalid business inputs.', result.errors)
+  }
+  return result.value
+}
+
+function defaultBusinessInputs(crop: string, areaHa: number, yieldTonHa: number): BusinessInputs {
+  return {
+    crop, area: areaHa, seed: 50 * areaHa, fertilizer: 80 * areaHa, water: 20 * areaHa,
+    labor: 100 * areaHa, machinery: 60 * areaHa, transport: 30 * areaHa, other: 10 * areaHa,
+    yieldTonHa, priceTon: 0,
+  }
+}
+
+function hasNullRatio(result: { costPerTon: number | null; marginPct: number | null; breakEvenYield: number | null }): boolean {
+  return result.costPerTon === null || result.marginPct === null || result.breakEvenYield === null
+}
+
+async function fetchPriceHistory(crop: string, municipality: string, months: number): Promise<{ priceTon: number }[]> {
+  const points: { priceTon: number }[] = []
+  for (let i = 0; i < months; i++) {
+    const date = daysAgo(i * 30)
+    const snapshot = await pricesProvider.getSnapshot(crop, municipality, date)
+    points.push({ priceTon: snapshot.ruralAvgPriceKg * 1000 })
+  }
+  return points
 }
 
 plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
@@ -111,37 +143,74 @@ plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
       plot, staticProfile, seasons, priorities: plot.priorities, indicators, catalog,
     })
 
-    const business = businessSnapshot.exists ? (businessSnapshot.data() as BusinessInputs) : null
+    let business: BusinessInputs | null = null
+    if (businessSnapshot.exists) {
+      const validated = validateBusinessInputs(businessSnapshot.data() as Record<string, unknown>)
+      if (validated.ok) {
+        business = validated.value
+      }
+    }
+
     const asOfDate = daysAgo(0)
 
     for (const strategy of strategies) {
-      const primaryCrop = strategy.sequence[0]?.crop
+      // Strategy A's sequence is sorted by historical year, so its first entry is the OLDEST
+      // season, not the plot's current crop — price it by plot.currentCrop instead.
+      const primaryCrop = strategy.type === 'current' ? plot.currentCrop : strategy.sequence[0]?.crop
       const catalogEntry = catalog.find((c) => c.id === primaryCrop)
-      if (!business && catalogEntry) {
-        strategy.infoGaps.push('No recorded business/current costs for this plot — using simulated defaults.')
-      }
 
       const priceSnapshot = await pricesProvider.getSnapshot(
         primaryCrop ?? plot.currentCrop, plot.municipality, asOfDate,
       )
-      const scenarioPrices = computeScenarioPrices(
-        { ...priceSnapshot, areaHa: plot.areaHa },
-        [{ priceTon: priceSnapshot.ruralAvgPriceKg * 1000 }],
-      )
+      strategy.evidence.push({
+        label: 'Rural average price', value: String(priceSnapshot.ruralAvgPriceKg), unit: 'MXN/kg',
+        period: asOfDate, provenance: priceSnapshot.provenance,
+      })
 
-      const baseInputs: BusinessInputs = business ?? {
-        crop: primaryCrop ?? plot.currentCrop,
-        area: plot.areaHa, seed: 50 * plot.areaHa, fertilizer: 80 * plot.areaHa, water: 20 * plot.areaHa,
-        labor: 100 * plot.areaHa, machinery: 60 * plot.areaHa, transport: 30 * plot.areaHa,
-        other: 10 * plot.areaHa, yieldTonHa: catalogEntry ? priceSnapshot.yieldTonHa : 0, priceTon: 0,
+      // 12 points so the 10th-percentile "drop" scenario doesn't collapse to the same index (0)
+      // as the plain minimum "floor" uses when the plot is too large for the guaranteed-price
+      // floor — floor(0.1 * (n-1)) only moves off index 0 once n >= 11.
+      const priceHistory = await fetchPriceHistory(primaryCrop ?? plot.currentCrop, plot.municipality, 12)
+      const scenarioPrices = computeScenarioPrices({ ...priceSnapshot, areaHa: plot.areaHa }, priceHistory)
+
+      // The farmer's one business/current record is for a single crop — only apply it to the
+      // strategy whose primary crop matches; every other strategy (and this one, when there's
+      // no match) falls back to simulated per-hectare defaults, with the gap recorded.
+      let baseInputs: BusinessInputs
+      if (business && business.crop === primaryCrop) {
+        baseInputs = business
+      } else {
+        if (businessSnapshot.exists && !business) {
+          strategy.infoGaps.push('Stored business/current data is invalid — using simulated defaults.')
+        } else if (!businessSnapshot.exists) {
+          strategy.infoGaps.push('No recorded business/current costs for this plot — using simulated defaults.')
+        } else if (business) {
+          strategy.infoGaps.push(
+            `Recorded business costs are for "${business.crop}", not "${primaryCrop}" — using simulated defaults for this crop.`,
+          )
+        }
+        baseInputs = defaultBusinessInputs(
+          primaryCrop ?? plot.currentCrop, plot.areaHa, catalogEntry ? priceSnapshot.yieldTonHa : 0,
+        )
       }
 
       for (const [scenario, priceTon] of Object.entries(scenarioPrices) as [RotationStrategy['economics'][number]['scenario'], number | null][]) {
         if (priceTon === null) {
+          strategy.infoGaps.push(`${scenario} price scenario has no value for this crop/area.`)
           continue
         }
         const result = computeEconomicResult({ ...baseInputs, priceTon })
+        if (hasNullRatio(result)) {
+          strategy.infoGaps.push(`${scenario} scenario: some economic ratios are undefined (zero production or price).`)
+        }
         strategy.economics.push({ scenario, priceTon, result })
+      }
+
+      const averageScenario = strategy.economics.find((e) => e.scenario === 'average')
+      if (averageScenario && averageScenario.result.marginPct !== null) {
+        strategy.summary.avgMargin = averageScenario.result.marginPct
+      } else {
+        strategy.infoGaps.push('Average-scenario margin is undefined — the card summary shows 0 as a placeholder.')
       }
     }
 

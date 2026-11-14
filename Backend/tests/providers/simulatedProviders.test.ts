@@ -23,6 +23,21 @@ describe('SimulatedClimateProvider', () => {
     const b = await provider.getDailySeries('power:24.25:-104.3125', '2026-01-01', '2026-01-02')
     expect(a).toEqual(b)
   })
+
+  it('generates physically plausible values for the semi-arid pilot zone, over many days', async () => {
+    const provider = new SimulatedClimateProvider()
+    const series = await provider.getDailySeries('power:24.25:-104.3125', '2026-01-01', '2026-03-31')
+    for (const day of series) {
+      expect(day.values.T2M_MIN).toBeLessThanOrEqual(day.values.T2M)
+      expect(day.values.T2M).toBeLessThanOrEqual(day.values.T2M_MAX)
+      expect(day.values.T2M).toBeGreaterThanOrEqual(-10)
+      expect(day.values.T2M).toBeLessThanOrEqual(45)
+      expect(day.values.PRECTOTCORR).toBeGreaterThanOrEqual(0)
+      expect(day.values.PRECTOTCORR).toBeLessThanOrEqual(50)
+      expect(day.values.RH2M).toBeGreaterThanOrEqual(0)
+      expect(day.values.RH2M).toBeLessThanOrEqual(100)
+    }
+  })
 })
 
 describe('SimulatedSoilMoistureProvider', () => {

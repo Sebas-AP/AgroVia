@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import request from 'supertest'
 import { createApp } from '../../src/app'
 import { getAdminFirestore } from '../../src/firestore/admin'
+import { COLLECTIONS } from '../../src/firestore/collections'
 import { seedCropCatalog } from '../../src/seed/cropCatalog.seed'
 import { seedDemoPlot } from '../../src/seed/demoPlot.seed'
 
@@ -23,6 +24,49 @@ describe('POST /plots/:id/rotations', () => {
     const res = await request(createApp()).post('/plots/does-not-exist/rotations').send({})
     expect(res.status).toBe(404)
     expect(res.body.error).toMatchObject({ code: expect.any(String), message: expect.any(String) })
+  })
+
+  it('returns strategies with real evidence and economics scenarios, not empty placeholders', async () => {
+    const res = await request(createApp()).post('/plots/demo-guadalupe-victoria/rotations').send({})
+    for (const strategy of res.body.strategies) {
+      expect(strategy.evidence.length).toBeGreaterThan(0)
+      expect(strategy.economics.length).toBeGreaterThan(0)
+    }
+    const alternative = res.body.strategies.find((s: { type: string }) => s.type === 'alternative')
+    expect(alternative.benefits.length).toBeGreaterThan(0)
+    expect(alternative.risks.length).toBeGreaterThan(0)
+  })
+
+  it('computes summary.avgMargin from the average price scenario, not a hardcoded 0', async () => {
+    const res = await request(createApp()).post('/plots/demo-guadalupe-victoria/rotations').send({})
+    const current = res.body.strategies.find((s: { type: string }) => s.type === 'current')
+    const averageScenario = current.economics.find((e: { scenario: string }) => e.scenario === 'average')
+    expect(current.summary.avgMargin).toBe(averageScenario.result.marginPct)
+  })
+
+  it('varies the economics across price scenarios instead of collapsing floor/average/drop to one value', async () => {
+    const res = await request(createApp()).post('/plots/demo-guadalupe-victoria/rotations').send({})
+    const current = res.body.strategies.find((s: { type: string }) => s.type === 'current')
+    const byScenario = (name: string) =>
+      current.economics.find((e: { scenario: string }) => e.scenario === name)?.priceTon
+    // floor/average/drop all derive from the same history; a single-point history would
+    // degenerate all three to the same number, so this specifically checks they differ.
+    expect(byScenario('floor')).not.toBe(byScenario('drop'))
+  })
+
+  it('falls back to simulated defaults and records the gap when business/current is invalid', async () => {
+    await getAdminFirestore()
+      .doc(COLLECTIONS.plotBusinessCurrent('demo-guadalupe-victoria'))
+      .set({ crop: 'corn', area: 2, seed: -500, fertilizer: 200, water: 50, labor: 300,
+        machinery: 150, transport: 80, other: 20, yieldTonHa: 3, priceTon: 4000 })
+
+    const res = await request(createApp()).post('/plots/demo-guadalupe-victoria/rotations').send({})
+    expect(res.status).toBe(200)
+    const current = res.body.strategies.find((s: { type: string }) => s.type === 'current')
+    expect(current.infoGaps.join(' ')).toMatch(/invalid/i)
+    expect(current.economics.every((e: { result: { investment: number } }) => e.result.investment >= 0)).toBe(true)
+
+    await getAdminFirestore().doc(COLLECTIONS.plotBusinessCurrent('demo-guadalupe-victoria')).delete()
   })
 })
 
