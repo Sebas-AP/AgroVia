@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if git diff --cached --no-renames --name-status -- assets/protected | grep -qvE '^A'; then
+  echo "ERROR: files under assets/protected must never be modified, deleted, or renamed (add-only)." >&2
+  exit 1
+fi
+
+staged="$(git diff --cached --name-only)"
+
+check_folder() {
+  local folder="$1"; shift
+  if grep -q "^$folder/" <<<"$staged"; then
+    scripts/lint-folder.sh "$folder" "$@"
+  fi
+}
+
+check_folder AppMovil pubspec.yaml flutter analyze
+check_folder Backend package.json npx eslint .
+check_folder Modelo requirements.txt ruff check .

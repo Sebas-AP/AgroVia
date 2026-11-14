@@ -1,1 +1,22 @@
 .claude/worktrees/
+.superpowers/
+
+# Secrets
+.env
+*.env.local
+
+# Flutter (AppMovil)
+AppMovil/build/
+AppMovil/.dart_tool/
+
+# Node (Backend)
+Backend/node_modules/
+
+# Python (Modelo)
+Modelo/__pycache__/
+Modelo/.venv/
+Modelo/*.egg-info/
+
+# Editor/OS noise
+.DS_Store
+.vscode/*.log

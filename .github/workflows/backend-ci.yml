@@ -1,0 +1,18 @@
+name: Backend CI
+on:
+  push:
+    paths: ["Backend/**"]
+  pull_request:
+    paths: ["Backend/**"]
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+        if: hashFiles('Backend/package.json') != ''
+      - run: scripts/lint-folder.sh Backend package.json npm ci
+      - run: scripts/lint-folder.sh Backend package.json npx eslint .
+      - run: scripts/lint-folder.sh Backend package.json npx vitest run
