@@ -21,3 +21,8 @@ Modelo/*.egg-info/
 # Editor/OS noise
 .DS_Store
 .vscode/*.log
+
+# Firebase emulator
+firestore-debug.log
+ui-debug.log
+.firebase/

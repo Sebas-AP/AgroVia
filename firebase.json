@@ -1,0 +1,11 @@
+{
+  "firestore": {
+    "rules": "Backend/firestore.rules",
+    "indexes": "Backend/firestore.indexes.json"
+  },
+  "emulators": {
+    "firestore": {
+      "port": 8080
+    }
+  }
+}

@@ -1,0 +1,16 @@
+export const COLLECTIONS = {
+  users: 'users',
+  plots: 'plots',
+  plotSeasons: (plotId: string) => `plots/${plotId}/seasons`,
+  plotEvents: (plotId: string) => `plots/${plotId}/events`,
+  plotStaticProfile: (plotId: string) => `plots/${plotId}/static/profile`,
+  plotIndicators: (plotId: string) => `plots/${plotId}/indicators`,
+  plotBusinessCurrent: (plotId: string) => `plots/${plotId}/business/current`,
+  cells: 'cells',
+  cellSeries: (cellId: string) => `cells/${cellId}/series`,
+  cropCatalog: 'cropCatalog',
+  prices: 'prices',
+  priceSnapshots: (cropId: string) => `prices/${cropId}/snapshots`,
+  strategies: 'strategies',
+  validations: 'validations',
+} as const
