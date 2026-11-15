@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import time
 from datetime import date
 
 import pytest
 
+from agrovia_api.cache import TTLCache
 from agrovia_api.catalogs import load_crops, load_municipalities
 from agrovia_api.clients.ornl_modis import NDVIObservation, NDVISeries
 from agrovia_api.errors import (
@@ -131,3 +133,58 @@ def test_evaluate_rejects_future_sowing() -> None:
     parcela = dict(PARCELA, fecha_siembra="2027-01-01")
     with pytest.raises(InvalidParcelError):
         service.evaluate(ParcelaInput.model_validate(parcela))
+
+
+def test_evaluate_caches_climate_for_the_same_coordinate_and_window() -> None:
+    service, climate, _ = build_service()
+    service.evaluate(ParcelaInput.model_validate(PARCELA))
+    service.evaluate(ParcelaInput.model_validate(PARCELA))
+    assert len(climate.calls) == 1
+
+
+def test_evaluate_falls_back_to_cached_climate_when_nasa_power_fails() -> None:
+    # A near-zero TTL means the cache entry has already gone stale by the second call, so this
+    # actually exercises the fetch-fails-but-stale-value-exists path, not a fresh cache hit.
+    climate = FakeClimateClient()
+    service = AgroViaService(
+        climate_client=climate, ndvi_client=FakeNDVIClient(), model_runner=FakeModelRunner(),
+        crops=load_crops(), municipalities=load_municipalities(), today=date(2026, 11, 14),
+        climate_cache=TTLCache(ttl_seconds=0.01),
+    )
+    result = service.evaluate(ParcelaInput.model_validate(PARCELA))
+    first_rain = result.clima.lluvia_ciclo_mm
+
+    time.sleep(0.02)
+    climate.error = RuntimeError("NASA POWER unavailable")
+    result_during_outage = service.evaluate(ParcelaInput.model_validate(PARCELA))
+
+    assert result_during_outage.clima.lluvia_ciclo_mm == first_rain
+    assert any("NASA POWER" in warning for warning in result_during_outage.advertencias)
+
+
+def test_evaluate_raises_when_climate_fails_with_nothing_cached() -> None:
+    service, climate, _ = build_service()
+    climate.error = RuntimeError("NASA POWER unavailable")
+    with pytest.raises(RuntimeError):
+        service.evaluate(ParcelaInput.model_validate(PARCELA))
+
+
+def test_evaluate_falls_back_to_cached_ndvi_when_ornl_fails_on_a_later_call() -> None:
+    ndvi_client = FakeNDVIClient(
+        series=NDVISeries(observations=[NDVIObservation(date(2026, 7, 1), 0.42)])
+    )
+    service = AgroViaService(
+        climate_client=FakeClimateClient(), ndvi_client=ndvi_client, model_runner=FakeModelRunner(),
+        crops=load_crops(), municipalities=load_municipalities(), today=date(2026, 11, 14),
+        ndvi_cache=TTLCache(ttl_seconds=0.01),
+    )
+    first = service.evaluate(ParcelaInput.model_validate(PARCELA))
+    assert first.ndvi is not None
+
+    time.sleep(0.02)
+    ndvi_client.error = RuntimeError("ORNL DAAC unavailable")
+    second = service.evaluate(ParcelaInput.model_validate(PARCELA))
+
+    assert second.ndvi is not None
+    assert second.ndvi.ndvi_ultimo == first.ndvi.ndvi_ultimo
+    assert any("NDVI" in warning and "caché" in warning for warning in second.advertencias)

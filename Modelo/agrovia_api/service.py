@@ -13,10 +13,11 @@ from .agronomy import (
     normalize_stage,
     trapezoid_score,
 )
+from .cache import TTLCache
 from .catalogs import load_crops, load_municipalities
 from .clients.nasa_power import ClimateAggregate, NasaPowerClient
-from .clients.ornl_modis import OrnlMODISClient
-from .config import MODEL_PATH
+from .clients.ornl_modis import NDVISeries, OrnlMODISClient
+from .config import CLIMATE_CACHE_TTL_SECONDS, MODEL_PATH, NDVI_CACHE_TTL_SECONDS
 from .errors import InvalidCropError, InvalidModalityError, InvalidParcelError
 from .geo import nearest_municipality
 from .model_runner import ModelRunner, classify_probability
@@ -70,6 +71,8 @@ class AgroViaService:
         crops: dict[str, dict[str, Any]],
         municipalities: list[dict[str, Any]],
         today: date | None = None,
+        climate_cache: TTLCache[ClimateAggregate] | None = None,
+        ndvi_cache: TTLCache[NDVISeries] | None = None,
     ) -> None:
         self._climate_client = climate_client
         self._ndvi_client = ndvi_client
@@ -77,6 +80,8 @@ class AgroViaService:
         self._crops = crops
         self._municipalities = municipalities
         self._today = today
+        self._climate_cache = climate_cache or TTLCache[ClimateAggregate](CLIMATE_CACHE_TTL_SECONDS)
+        self._ndvi_cache = ndvi_cache or TTLCache[NDVISeries](NDVI_CACHE_TTL_SECONDS)
 
     def evaluate(self, parcela: ParcelaInput) -> RespuestaEvaluacion:
         today = self._today or date.today()
@@ -121,8 +126,8 @@ class AgroViaService:
             parcela.fecha_siembra, stage, cycle_days, today=today
         )
 
-        climate = self._climate_client.fetch_cycle(
-            parcela.latitud, parcela.longitud, window_start, window_end
+        climate = self._fetch_climate(
+            parcela.latitud, parcela.longitud, window_start, window_end, warnings
         )
 
         ndvi = self._fetch_ndvi(
@@ -190,6 +195,38 @@ class AgroViaService:
             advertencias=warnings,
         )
 
+    @staticmethod
+    def _window_key(latitude: float, longitude: float, start: date, end: date) -> tuple:
+        return (round(latitude, 4), round(longitude, 4), start.isoformat(), end.isoformat())
+
+    def _fetch_climate(
+        self,
+        latitude: float,
+        longitude: float,
+        start: date,
+        end: date,
+        warnings: list[str],
+    ) -> ClimateAggregate:
+        key = self._window_key(latitude, longitude, start, end)
+        cached = self._climate_cache.get(key)
+        if cached is not None:
+            return cached
+        try:
+            climate = self._climate_client.fetch_cycle(latitude, longitude, start, end)
+        except Exception:
+            # Climate is required to run the model at all -- fall back to the last known value
+            # for this exact (lat, lon, window) only if one actually exists; never fabricate one.
+            stale = self._climate_cache.get_stale(key)
+            if stale is not None:
+                warnings.append(
+                    "No se pudo consultar NASA POWER; se usó el último clima en caché para "
+                    "esta coordenada y ventana."
+                )
+                return stale
+            raise
+        self._climate_cache.set(key, climate)
+        return climate
+
     def _fetch_ndvi(
         self,
         latitude: float,
@@ -198,14 +235,26 @@ class AgroViaService:
         end: date,
         warnings: list[str],
     ) -> NDVIMODIS | None:
-        try:
-            series = self._ndvi_client.fetch_ndvi(latitude, longitude, start, end)
-        except Exception as exc:  # noqa: BLE001 - NDVI is supplementary
-            warnings.append(
-                f"No se pudo consultar NDVI de ORNL DAAC ({exc}); "
-                "la evaluación continúa sin este indicador."
-            )
-            return None
+        key = self._window_key(latitude, longitude, start, end)
+        series = self._ndvi_cache.get(key)
+        if series is None:
+            try:
+                series = self._ndvi_client.fetch_ndvi(latitude, longitude, start, end)
+                self._ndvi_cache.set(key, series)
+            except Exception as exc:  # noqa: BLE001 - NDVI is supplementary
+                stale = self._ndvi_cache.get_stale(key)
+                if stale is not None:
+                    series = stale
+                    warnings.append(
+                        f"No se pudo consultar NDVI de ORNL DAAC ({exc}); se usó el último "
+                        "NDVI en caché para esta coordenada y ventana."
+                    )
+                else:
+                    warnings.append(
+                        f"No se pudo consultar NDVI de ORNL DAAC ({exc}); "
+                        "la evaluación continúa sin este indicador."
+                    )
+                    return None
 
         if series.count == 0:
             warnings.append(
