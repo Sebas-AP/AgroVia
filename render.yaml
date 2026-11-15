@@ -2,6 +2,7 @@ services:
   - type: web
     name: agrovia-modelo
     runtime: python
+    plan: free
     rootDir: Modelo
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn agrovia_api.main:app --host 0.0.0.0 --port $PORT
@@ -11,6 +12,7 @@ services:
   - type: web
     name: agrovia-backend
     runtime: node
+    plan: free
     rootDir: Backend
     buildCommand: npm install && npm run build
     startCommand: node dist/server.js
