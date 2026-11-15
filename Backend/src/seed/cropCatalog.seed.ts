@@ -2,7 +2,7 @@ import type { Firestore } from 'firebase-admin/firestore'
 import { COLLECTIONS } from '../firestore/collections'
 import type { CropCatalogEntry } from '../types/firestoreDocs'
 
-const CROPS: CropCatalogEntry[] = [
+export const CROP_CATALOG_SEED: CropCatalogEntry[] = [
   {
     id: 'corn',
     name: 'Grain corn',
@@ -79,7 +79,7 @@ const CROPS: CropCatalogEntry[] = [
 
 export async function seedCropCatalog(db: Firestore): Promise<void> {
   const batch = db.batch()
-  for (const crop of CROPS) {
+  for (const crop of CROP_CATALOG_SEED) {
     batch.set(db.collection(COLLECTIONS.cropCatalog).doc(crop.id), crop)
   }
   await batch.commit()

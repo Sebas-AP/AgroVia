@@ -1,5 +1,6 @@
 import type {
-  NDVIMODIS, ClimaNASA, EvaluacionModelo, MunicipioDetectado, VentanaInput, PrediccionInput,
+  NDVIMODIS, ClimaNASA, ClimaDiario, EvaluacionModelo, MunicipioDetectado, VentanaInput,
+  PrediccionInput, PreciosInput, PreciosSIAP,
 } from './modeloTypes'
 
 export class ModeloHttpError extends Error {}
@@ -41,8 +42,20 @@ export class ModeloClient {
     return this.post('/api/v1/clima', input)
   }
 
+  // Real per-day NASA POWER values (Modelo/agrovia_api/main.py, clima_diario) — a separate
+  // route and cache from /api/v1/clima, which returns a single window aggregate.
+  climaDiario(input: VentanaInput): Promise<ClimaDiario> {
+    return this.post('/api/v1/clima/diario', input)
+  }
+
   predecir(input: PrediccionInput): Promise<EvaluacionModelo> {
     return this.post('/api/v1/predecir', input)
+  }
+
+  // Real SIAP municipal price/yield rows (Modelo/agrovia_api/prices.py). Returns every year the
+  // dataset has for this crop/municipality; the Backend picks the latest one it can use.
+  precios(input: PreciosInput): Promise<PreciosSIAP> {
+    return this.post('/api/v1/precios', input)
   }
 
   municipio(latitud: number, longitud: number): Promise<MunicipioDetectado> {

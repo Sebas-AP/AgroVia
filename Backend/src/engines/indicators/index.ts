@@ -35,10 +35,10 @@ export interface ClimateDayInput {
 
 export interface SoilMoistureDayInput {
   date: string
-  smSurface: number
-  smRootzone: number
+  smSurface: number | null
+  smRootzone: number | null
   smRootzonePctl: number | null
-  soilTempLayer1: number
+  soilTempLayer1: number | null
   provenance: Provenance
 }
 
@@ -61,6 +61,17 @@ export interface ComputeIndicatorsInput {
 
 function average(values: number[]): number {
   return values.length === 0 ? 0 : values.reduce((sum, v) => sum + v, 0) / values.length
+}
+
+// Last value that was actually reported, not simply the last calendar entry: a day with a
+// missing reading must not erase a real earlier observation.
+function lastReported(values: (number | null)[]): number | null {
+  for (let i = values.length - 1; i >= 0; i--) {
+    if (values[i] !== null) {
+      return values[i]
+    }
+  }
+  return null
 }
 
 // Trailing-window fields (waterBalance*, soilTempAvg*, moistureAnomalyPctl) use the full arrays
@@ -149,8 +160,8 @@ export function computeIndicators(input: ComputeIndicatorsInput): PlotIndicators
     waterBalance10d: computeWaterBalance(waterBalanceDays, 10),
     waterBalance15d: computeWaterBalance(waterBalanceDays, 15),
     waterBalance30d: computeWaterBalance(waterBalanceDays, 30),
-    surfaceSoilMoisture: soilMoisture.length > 0 ? soilMoisture[soilMoisture.length - 1].smSurface : null,
-    rootZoneSoilMoisture: soilMoisture.length > 0 ? soilMoisture[soilMoisture.length - 1].smRootzone : null,
+    surfaceSoilMoisture: lastReported(soilMoisture.map((d) => d.smSurface)),
+    rootZoneSoilMoisture: lastReported(soilMoisture.map((d) => d.smRootzone)),
     moistureAnomalyPctl,
     soilTempAvg7d: soilTempAverages.avg7d,
     soilTempAvg10d: soilTempAverages.avg10d,
@@ -168,6 +179,7 @@ export function computeIndicators(input: ComputeIndicatorsInput): PlotIndicators
     sources: Array.from(new Set(sources)),
     rainfallProvenance: climate.length > 0 ? climate[climate.length - 1].provenance : null,
     moistureAnomalyProvenance: soilMoisture.length > 0 ? soilMoisture[soilMoisture.length - 1].provenance : null,
+    ndviProvenance: ndvi.length > 0 ? ndvi[ndvi.length - 1].provenance : null,
     asOf: monthClimate.length > 0 ? monthClimate[monthClimate.length - 1].date : `${month}-01`,
     engineVersion: ENGINE_VERSION,
   }

@@ -65,14 +65,9 @@ describe('combineScores', () => {
       relativeHumidityAvg: 50, frostDays: 0, lastFrostDate: null, heatStressDays: 0,
       growingDegreeDaysAccum: 0, ndviAvg: null, ndviDeviationVsYears: null, bareSoil: null,
       sources: [], asOf: '2026-01-01', engineVersion: '1.0.0',
-      rainfallProvenance: null, moistureAnomalyProvenance: null,
+      rainfallProvenance: null, moistureAnomalyProvenance: null, ndviProvenance: null,
     }
-    const staticProfile = {
-      slopeDegrees: 5, sandPct: 40, siltPct: 30, clayPct: 30, organicCarbon: 1.5, pH: 7, cec: 15,
-      waterRetentionMm: 100,
-      provenance: { source: 't', product: 't', version: 'v1', asOf: '2026-01-01', latencyDays: 0, kind: 'estimated' as const, origin: 'simulated' as const },
-    }
-    const { scores, totalScore } = combineScores([crop('corn', 400)], [{ crop: 'corn' }], staticProfile, indicators, priorities)
+    const { scores, totalScore } = combineScores([crop('corn', 400)], [{ crop: 'corn' }], indicators, priorities)
     expect(Object.keys(scores).sort()).toEqual(['climateRisk', 'economy', 'market', 'pests', 'soil', 'water'].sort())
     expect(totalScore).toBeGreaterThanOrEqual(0)
     expect(scores.modelSuccess).toBeUndefined()
@@ -87,15 +82,10 @@ describe('combineScores', () => {
       relativeHumidityAvg: 50, frostDays: 0, lastFrostDate: null, heatStressDays: 0,
       growingDegreeDaysAccum: 0, ndviAvg: null, ndviDeviationVsYears: null, bareSoil: null,
       sources: [], asOf: '2026-01-01', engineVersion: '1.0.0',
-      rainfallProvenance: null, moistureAnomalyProvenance: null,
-    }
-    const staticProfile = {
-      slopeDegrees: 5, sandPct: 40, siltPct: 30, clayPct: 30, organicCarbon: 1.5, pH: 7, cec: 15,
-      waterRetentionMm: 100,
-      provenance: { source: 't', product: 't', version: 'v1', asOf: '2026-01-01', latencyDays: 0, kind: 'estimated' as const, origin: 'simulated' as const },
+      rainfallProvenance: null, moistureAnomalyProvenance: null, ndviProvenance: null,
     }
     const { scores, totalScore } = combineScores(
-      [crop('corn', 400)], [{ crop: 'corn' }], staticProfile, indicators, priorities, { corn: 1.0 },
+      [crop('corn', 400)], [{ crop: 'corn' }], indicators, priorities, { corn: 1.0 },
     )
     expect(scores.modelSuccess).toBe(100)
     const expectedTotal = (scores.water + scores.soil + scores.climateRisk + scores.pests + scores.economy + scores.market + 100) / 7

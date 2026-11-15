@@ -6,7 +6,6 @@ import type {
   PlotSnapshot, PlotPriorities, PlotIndicators, CropCatalogEntry,
 } from '../../types/firestoreDocs'
 import type { RotationStrategy } from '../../types/strategy'
-import type { StaticSoilProfile } from '../../providers/SoilProvider'
 import { filterCompatibleCrops } from './filters'
 import { combineScores } from './scoring'
 
@@ -27,7 +26,6 @@ const DEFAULT_MAX_ALTERNATIVES = 5
 
 export interface GenerateStrategiesInput {
   plot: PlotSnapshot
-  staticProfile: StaticSoilProfile
   seasons: { year: number; crop: string }[]
   priorities: PlotPriorities
   indicators: PlotIndicators
@@ -119,6 +117,11 @@ function buildIndicatorEvidence(indicators: PlotIndicators, infoGaps: string[]):
       label: 'Root-zone moisture anomaly', value: String(indicators.moistureAnomalyPctl), unit: 'percentile',
       period: indicators.asOf, provenance: indicators.moistureAnomalyProvenance,
     })
+  } else if (indicators.moistureAnomalyProvenance) {
+    infoGaps.push(
+      'Root-zone moisture percentile is unavailable: no real historical climatology baseline ' +
+      'is connected yet, so the percentile was not estimated.',
+    )
   } else {
     infoGaps.push('No soil-moisture source provenance available for the moisture-anomaly figure.')
   }
@@ -139,7 +142,6 @@ function buildStrategy(
   rationale: string,
   infoGaps: string[],
   catalog: CropCatalogEntry[],
-  staticProfile: StaticSoilProfile,
   indicators: PlotIndicators,
   priorities: PlotPriorities,
   waterAvailability: PlotSnapshot['constraints']['waterAvailability'],
@@ -150,7 +152,13 @@ function buildStrategy(
     infoGaps.push('No crop in this sequence matched the catalog — the water/soil scores below are not meaningful (shown as 0).')
   }
   const { scores, totalScore } = combineScores(
-    crops, sequence, staticProfile, indicators, priorities, model.successByCrop,
+    crops, sequence, indicators, priorities, model.successByCrop,
+  )
+  // The static soil profile (and its slope) is not connected; this is a permanent gap of the
+  // soil criterion in this build, recorded on every strategy rather than hidden.
+  infoGaps.push(
+    'Slope is unavailable, so erosion protection is not part of the soil score; ' +
+    'the soil criterion uses nitrogen fixation and organic-matter contribution only.',
   )
   const evidence = buildIndicatorEvidence(indicators, infoGaps)
   if (scores.modelSuccess !== undefined && model.info) {
@@ -217,7 +225,7 @@ function buildCurrentStrategy(input: GenerateStrategiesInput): RotationStrategy 
   return buildStrategy(
     'current', 'current', sequence,
     'Reconstructed from this plot\'s recorded season history.',
-    infoGaps, input.catalog, input.staticProfile, input.indicators, input.priorities,
+    infoGaps, input.catalog, input.indicators, input.priorities,
     input.plot.constraints.waterAvailability, modelContextFrom(input),
   )
 }
@@ -250,7 +258,7 @@ function buildAlternativeStrategies(input: GenerateStrategiesInput): RotationStr
       candidates.push(buildStrategy(
         id, 'alternative', sequence,
         `Alternates ${cropA.name} and ${cropB.name}, both compatible with this plot's declared water availability.`,
-        [], input.catalog, input.staticProfile, input.indicators, input.priorities,
+        [], input.catalog, input.indicators, input.priorities,
         input.plot.constraints.waterAvailability, modelContextFrom(input),
       ))
     }

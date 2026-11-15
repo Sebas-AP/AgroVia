@@ -1,5 +1,4 @@
 import type { CropCatalogEntry, PlotPriorities, PlotIndicators, StrategyScores } from '../../types/firestoreDocs'
-import type { StaticSoilProfile } from '../../providers/SoilProvider'
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
@@ -24,18 +23,21 @@ export function scoreWater(crops: CropCatalogEntry[], priorities: PlotPriorities
 
 export function scoreSoil(
   crops: CropCatalogEntry[],
-  staticProfile: StaticSoilProfile,
   priorities: PlotPriorities,
 ): number {
+  // The real soil profile (texture, pH, CEC, slope) is not connected in this build. Slope was
+  // the only profile field the score used, so that term is gone rather than simulated. The
+  // remaining nitrogen + organic-matter components top out at 60; scaling by 100/60 keeps this
+  // criterion on the same 0-100 range as before so removing the fabricated term does not also
+  // silently shrink every strategy's total score.
   const base = average(
     crops.map((c) => {
       const nitrogenBonus = c.fixesNitrogen ? 30 : 0
       const organicMatter = ORGANIC_MATTER_SCORE[c.organicMatterContribution]
-      const erosionProtection = clamp(40 - staticProfile.slopeDegrees * 2, 0, 40)
-      return clamp(nitrogenBonus + organicMatter + erosionProtection, 0, 100)
+      return clamp((nitrogenBonus + organicMatter) * (100 / 60), 0, 100)
     }),
   )
-  const weight = (priorities.nitrogen + priorities.organicMatter + priorities.erosion) / 3 / 5
+  const weight = (priorities.nitrogen + priorities.organicMatter) / 2 / 5
   return base * weight
 }
 
@@ -88,7 +90,6 @@ export function scoreModelSuccess(
 export function combineScores(
   crops: CropCatalogEntry[],
   sequence: { crop: string }[],
-  staticProfile: StaticSoilProfile,
   indicators: PlotIndicators,
   priorities: PlotPriorities,
   modelSuccessByCrop?: Record<string, number>,
@@ -96,7 +97,7 @@ export function combineScores(
   const modelSuccess = scoreModelSuccess(sequence, modelSuccessByCrop)
   const scores: StrategyScores = {
     water: scoreWater(crops, priorities),
-    soil: scoreSoil(crops, staticProfile, priorities),
+    soil: scoreSoil(crops, priorities),
     climateRisk: scoreClimateRisk(indicators),
     pests: scorePests(sequence),
     economy: scoreEconomy(priorities),

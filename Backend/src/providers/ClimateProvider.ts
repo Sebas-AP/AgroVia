@@ -1,5 +1,7 @@
 import type { Provenance } from '../types/provenance'
 import { seededRandom, enumerateDates } from './seededRandom'
+import { parseCellId } from '../firestore/cellId'
+import type { ModeloClient } from '../integration/modeloClient'
 
 export interface ClimateDay {
   date: string
@@ -9,6 +11,44 @@ export interface ClimateDay {
 
 export interface ClimateProvider {
   getDailySeries(cellId: string, from: string, to: string): Promise<ClimateDay[]>
+}
+
+// Calls Modelo's POST /api/v1/clima/diario (real NASA POWER daily point data, cached there by
+// window — see Modelo/agrovia_api/cache.py). cellId encodes the already-snapped cell coordinate
+// (firestore/cellId.ts), which stands in for a true per-cell lookup because Modelo's route is
+// point-based, not cell-based.
+//
+// The returned array is deliberately DENSE: exactly one entry per calendar day in [from, to],
+// with `values: {}` for a day Modelo reported no usable reading for. The indicators engine's
+// gap imputation (engines/indicators/imputation.ts) detects gaps by array position, so dropping
+// a dataless day instead of including it empty would silently break gap detection — that is not
+// data fabrication, it is preserving the calendar so missing days stay visibly missing.
+export class ModeloClimateProvider implements ClimateProvider {
+  constructor(private readonly client: ModeloClient) {}
+
+  async getDailySeries(cellId: string, from: string, to: string): Promise<ClimateDay[]> {
+    const { lat, lon } = parseCellId(cellId)
+    const response = await this.client.climaDiario({ latitud: lat, longitud: lon, inicio: from, fin: to })
+    // Modelo only includes days that had at least one usable parameter; a day may also be
+    // present with only some of its parameters. Both cases are preserved as received.
+    const valuesByDate = new Map(response.serie.map((point) => [point.fecha, point.valores]))
+    return enumerateDates(from, to).map((date) => ({
+      date,
+      values: valuesByDate.get(date) ?? {},
+      provenance: {
+        source: response.fuente,
+        product: 'AG community daily',
+        version: 'live-1',
+        asOf: to,
+        // ASSUMPTION: Modelo doesn't surface NASA POWER ingestion latency; 0 matches the
+        // simulated provider's placeholder rather than a measured figure, same as
+        // ModeloNdviProvider. Revisit if Modelo starts exposing it.
+        latencyDays: 0,
+        kind: 'historical',
+        origin: 'real',
+      },
+    }))
+  }
 }
 
 // Physically plausible ranges for the Guadalupe Victoria semi-arid highland pilot zone — not
