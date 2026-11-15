@@ -56,6 +56,28 @@ describe('toParcelaInput', () => {
   it('throws when there is no sowing event, without inventing a sowing date', () => {
     expect(() => toParcelaInput({ plot: PLOT, events: [] })).toThrow(/sowing event/)
   })
+
+  it('uses the polygon centroid instead of the declared center when a valid boundary exists', () => {
+    const polygonCenter = { lat: 24.451, lon: -104.12 }
+    const polygon = [
+      { lat: polygonCenter.lat - 0.001, lon: polygonCenter.lon - 0.001 },
+      { lat: polygonCenter.lat - 0.001, lon: polygonCenter.lon + 0.001 },
+      { lat: polygonCenter.lat + 0.001, lon: polygonCenter.lon + 0.001 },
+      { lat: polygonCenter.lat + 0.001, lon: polygonCenter.lon - 0.001 },
+    ]
+
+    const parcela = toParcelaInput({ plot: { ...PLOT, polygon }, events: EVENTS })
+
+    expect(parcela.latitud).toBeCloseTo(polygonCenter.lat, 4)
+    expect(parcela.longitud).toBeCloseTo(polygonCenter.lon, 4)
+    expect(parcela.superficie_hectareas).toBe(PLOT.areaHa)
+  })
+
+  it('falls back to the declared center when the stored polygon is invalid', () => {
+    const parcela = toParcelaInput({ plot: { ...PLOT, polygon: [{ lat: 24.45, lon: -104.12 }] }, events: EVENTS })
+    expect(parcela.latitud).toBe(PLOT.center.lat)
+    expect(parcela.longitud).toBe(PLOT.center.lon)
+  })
 })
 
 describe('fromParcelaInput', () => {

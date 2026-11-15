@@ -14,6 +14,12 @@ beforeAll(async () => {
   const db = getAdminFirestore()
   await seedCropCatalog(db)
   await seedDemoPlot(db)
+  // A recorded business/current record is what makes an economic block possible at all; the
+  // Backend no longer invents per-hectare defaults when it is missing.
+  await db.doc(COLLECTIONS.plotBusinessCurrent('demo-guadalupe-victoria')).set({
+    crop: 'corn', area: 9.6, seed: 480, fertilizer: 770, water: 190, labor: 960,
+    machinery: 575, transport: 290, other: 95, yieldTonHa: 3.2, priceTon: 4200,
+  })
   authHeader = `Bearer ${await mintIdTokenForUid('demo-owner')}`
 })
 
@@ -31,13 +37,16 @@ describe('POST /plots/:id/rotations', () => {
     expect(res.body.error).toMatchObject({ code: expect.any(String), message: expect.any(String) })
   })
 
-  it('returns strategies with real evidence and economics scenarios, not empty placeholders', async () => {
+  it('returns strategies with real evidence, and economics only where a business record exists', async () => {
     const res = await request(createApp()).post('/plots/demo-guadalupe-victoria/rotations').set('authorization', authHeader).send({})
-    for (const strategy of res.body.strategies) {
-      expect(strategy.evidence.length).toBeGreaterThan(0)
-      expect(strategy.economics.length).toBeGreaterThan(0)
-    }
+    const current = res.body.strategies.find((s: { type: string }) => s.type === 'current')
+    expect(current.evidence.length).toBeGreaterThan(0)
+    // The seeded business record is for corn, so only the current (corn) strategy can be priced.
+    expect(current.economics.length).toBeGreaterThan(0)
+
     const alternative = res.body.strategies.find((s: { type: string }) => s.type === 'alternative')
+    expect(alternative.economics).toEqual([])
+    expect(alternative.infoGaps.join(' ')).toMatch(/business costs are for "corn"/)
     expect(alternative.benefits.length).toBeGreaterThan(0)
     expect(alternative.risks.length).toBeGreaterThan(0)
   })
@@ -60,7 +69,7 @@ describe('POST /plots/:id/rotations', () => {
     expect(byScenario('floor')).not.toBe(byScenario('drop'))
   })
 
-  it('falls back to simulated defaults and records the gap when business/current is invalid', async () => {
+  it('shows no economic result and records the gap when business/current is invalid', async () => {
     await getAdminFirestore()
       .doc(COLLECTIONS.plotBusinessCurrent('demo-guadalupe-victoria'))
       .set({ crop: 'corn', area: 2, seed: -500, fertilizer: 200, water: 50, labor: 300,
@@ -70,24 +79,28 @@ describe('POST /plots/:id/rotations', () => {
     expect(res.status).toBe(200)
     const current = res.body.strategies.find((s: { type: string }) => s.type === 'current')
     expect(current.infoGaps.join(' ')).toMatch(/invalid/i)
-    expect(current.economics.every((e: { result: { investment: number } }) => e.result.investment >= 0)).toBe(true)
+    expect(current.economics).toEqual([])
 
     await getAdminFirestore().doc(COLLECTIONS.plotBusinessCurrent('demo-guadalupe-victoria')).delete()
   })
 
-  it('fetches price history once per distinct crop, not once per strategy', async () => {
-    const spy = vi.spyOn(SimulatedPricesProvider.prototype, 'getSnapshot')
+  it('fetches each price snapshot and history once per distinct crop, not once per strategy', async () => {
+    const snapshotSpy = vi.spyOn(SimulatedPricesProvider.prototype, 'getSnapshot')
+    const historySpy = vi.spyOn(SimulatedPricesProvider.prototype, 'getHistory')
     const res = await request(createApp()).post('/plots/demo-guadalupe-victoria/rotations').set('authorization', authHeader).send({})
 
     const distinctCrops = new Set(
       res.body.strategies.map((s: { type: string; sequence: { crop: string }[] }) =>
         s.type === 'current' ? 'corn' : s.sequence[0]!.crop),
     )
-    // 1 snapshot + 12 history points per distinct crop; strictly less than per-strategy (13 *
-    // strategies) would have taken, proving the fetch is keyed by crop, not by strategy.
-    expect(spy.mock.calls.length).toBe(distinctCrops.size * 13)
-    expect(spy.mock.calls.length).toBeLessThan(res.body.strategies.length * 13)
-    spy.mockRestore()
+    // One snapshot + one annual history request per distinct crop; strictly less than the
+    // per-strategy count would have been before this was keyed by crop.
+    expect(snapshotSpy.mock.calls.length).toBe(distinctCrops.size)
+    expect(historySpy.mock.calls.length).toBe(distinctCrops.size)
+    expect(snapshotSpy.mock.calls.length + historySpy.mock.calls.length)
+      .toBeLessThan(res.body.strategies.length * 2)
+    snapshotSpy.mockRestore()
+    historySpy.mockRestore()
   })
 
   it('evidence provenance for climate-derived figures comes from the real provider, not a fixed placeholder', async () => {
@@ -149,6 +162,10 @@ describe('end-to-end with simulated providers: sow a plot, generate rotations, r
       createdAt: now, updatedAt: now,
     })
     await db.collection(COLLECTIONS.plotSeasons(plotId)).doc('2025').set({ year: 2025, crop: 'beans', origin: 'demo' })
+    await db.doc(COLLECTIONS.plotBusinessCurrent(plotId)).set({
+      crop: 'corn', area: 7.5, seed: 375, fertilizer: 600, water: 150, labor: 750,
+      machinery: 450, transport: 225, other: 75, yieldTonHa: 3, priceTon: 4200,
+    })
 
     const ownerToken = `Bearer ${await mintIdTokenForUid(ownerUid)}`
 
@@ -163,9 +180,16 @@ describe('end-to-end with simulated providers: sow a plot, generate rotations, r
 
     for (const strategy of got.body.strategies) {
       expect(strategy.evidence.length).toBeGreaterThan(0)
-      expect(strategy.economics.length).toBeGreaterThan(0)
-      for (const scenario of strategy.economics) {
-        expect(scenario.result).toMatchObject({ investment: expect.any(Number), revenue: expect.any(Number) })
+      if (strategy.type === 'current') {
+        // The recorded business record is for corn, so only the current (corn) strategy gets
+        // economics. The alternatives are different crops and must not borrow corn's costs.
+        expect(strategy.economics.length).toBeGreaterThan(0)
+        for (const scenario of strategy.economics) {
+          expect(scenario.result).toMatchObject({ investment: expect.any(Number), revenue: expect.any(Number) })
+        }
+      } else {
+        expect(strategy.economics).toEqual([])
+        expect(strategy.infoGaps.join(' ')).toMatch(/business costs are for "corn"/)
       }
     }
   })

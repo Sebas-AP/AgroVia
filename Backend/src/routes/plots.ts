@@ -7,13 +7,15 @@ import { plotOwnerAuth } from '../middleware/plotOwnerAuth'
 import { computeIndicators } from '../engines/indicators'
 import { generateStrategies } from '../engines/rotation'
 import { computeEconomicResult, computeScenarioPrices } from '../engines/economics'
-import { SimulatedClimateProvider } from '../providers/ClimateProvider'
-import { SimulatedSoilMoistureProvider } from '../providers/SoilMoistureProvider'
-import { SimulatedNdviProvider, ModeloNdviProvider, type NdviProvider } from '../providers/NdviProvider'
-import { SimulatedSoilProvider } from '../providers/SoilProvider'
-import { SimulatedPricesProvider, type PricesProvider } from '../providers/PricesProvider'
-import { ModeloClient } from '../integration/modeloClient'
+import { runtimeProviders } from '../providers/runtime'
+import type { PricesProvider } from '../providers/PricesProvider'
+import type { ModeloClient } from '../integration/modeloClient'
 import { toModeloCropId } from '../integration/modeloCropIds'
+import { analyzePlotGeometry, plotPointForLookup } from '../geo/plotGeometry'
+import { classifyIntent } from '../engines/via/intents'
+import { buildViaAnswer, type ViaContext } from '../engines/via'
+import { createAnswerPolisherFromEnv } from '../engines/via/polisher'
+import { findUnsupportedNumbers } from '../engines/via/verification'
 import type { GenerateStrategiesInput } from '../engines/rotation'
 import type { PlotSnapshot, CropCatalogEntry } from '../types/firestoreDocs'
 import type { BusinessInputs } from '../types/business'
@@ -23,22 +25,15 @@ export const plotsRouter = Router()
 
 plotsRouter.use('/plots/:id', plotOwnerAuth)
 
-const climateProvider = new SimulatedClimateProvider()
-const soilMoistureProvider = new SimulatedSoilMoistureProvider()
-const soilProvider = new SimulatedSoilProvider()
-const pricesProvider = new SimulatedPricesProvider()
-
-// USE_SIMULATED_PROVIDERS=false switches NDVI to the real Modelo-backed provider once
-// MODELO_BASE_URL is set. Climate and crop-criteria stay simulated regardless — see
-// INTEGRACION.md for the documented contract gaps (Modelo's /clima is a window aggregate, not
-// a daily series the indicators engine could use without fabricating values; its INIFAP
-// catalogue doesn't carry the rotation-scoring fields cropCatalog needs). Never silently
-// decided here: this file just reflects what's actually implemented.
-const useSimulatedProviders = process.env.USE_SIMULATED_PROVIDERS !== 'false'
-const modeloClient = (!useSimulatedProviders && process.env.MODELO_BASE_URL)
-  ? new ModeloClient({ baseUrl: process.env.MODELO_BASE_URL })
-  : null
-const ndviProvider: NdviProvider = modeloClient ? new ModeloNdviProvider(modeloClient) : new SimulatedNdviProvider()
+// All providers switch together in providers/runtime.ts: real when MODELO_BASE_URL is set,
+// simulated only on explicit opt-in. Nothing falls back silently from one to the other here.
+const {
+  modeloClient, climate: climateProvider, soilMoisture: soilMoistureProvider, ndvi: ndviProvider,
+  prices: pricesProvider,
+} = runtimeProviders
+// Null unless ANTHROPIC_API_KEY and VIA_POLISH_MODEL are both configured; the template answer is
+// the default and only path otherwise.
+const viaAnswerPolisher = createAnswerPolisherFromEnv()
 
 async function getPlotOrThrow(id: string): Promise<PlotSnapshot> {
   const doc = await getAdminFirestore().collection(COLLECTIONS.plots).doc(id).get()
@@ -58,11 +53,16 @@ async function computeCurrentIndicators(plot: PlotSnapshot, catalog: CropCatalog
   const to = daysAgo(0)
   const from = daysAgo(30)
   const month = to.slice(0, 7)
-  const modisCellId = computeCellId(plot.center.lat, plot.center.lon, 'modis')
+  // Same point rule as modeloMapper: prefer the polygon centroid when a valid boundary exists,
+  // so the satellite lookup matches the actual field rather than a possibly misplaced center.
+  const lookupPoint = plotPointForLookup(plot)
+  const modisCellId = computeCellId(lookupPoint.lat, lookupPoint.lon, 'modis')
 
   const [climate, soilMoisture, ndvi] = await Promise.all([
     climateProvider.getDailySeries(plot.powerCellId, from, to),
-    soilMoistureProvider.getDailySeries(plot.smapCellId, from, to),
+    // The real soil-moisture provider derives GWETTOP/GWETROOT/TS from the same NASA POWER
+    // daily window, so it is keyed by the same power cell (it memoizes the climate series).
+    soilMoistureProvider.getDailySeries(plot.powerCellId, from, to),
     ndviProvider.getSeries(modisCellId, from, to),
   ])
 
@@ -119,22 +119,15 @@ function parseBusinessInputs(body: Record<string, unknown>): BusinessInputs {
   return result.value
 }
 
-function defaultBusinessInputs(crop: string, areaHa: number, yieldTonHa: number): BusinessInputs {
-  return {
-    crop, area: areaHa, seed: 50 * areaHa, fertilizer: 80 * areaHa, water: 20 * areaHa,
-    labor: 100 * areaHa, machinery: 60 * areaHa, transport: 30 * areaHa, other: 10 * areaHa,
-    yieldTonHa, priceTon: 0,
-  }
-}
-
 function hasNullRatio(result: { costPerTon: number | null; marginPct: number | null; breakEvenYield: number | null }): boolean {
   return result.costPerTon === null || result.marginPct === null || result.breakEvenYield === null
 }
 
-async function fetchPriceHistory(crop: string, municipality: string, months: number): Promise<{ priceTon: number }[]> {
-  const dates = Array.from({ length: months }, (_, i) => daysAgo(i * 30))
-  const snapshots = await Promise.all(dates.map((date) => pricesProvider.getSnapshot(crop, municipality, date)))
-  return snapshots.map((snapshot) => ({ priceTon: snapshot.ruralAvgPriceKg * 1000 }))
+// Real SIAP history is annual, so the scenario engine receives one real point per available year
+// instead of twelve synthetic monthly snapshots.
+async function fetchPriceHistory(crop: string, municipality: string): Promise<{ priceTon: number }[]> {
+  const points = await pricesProvider.getHistory(crop, municipality)
+  return points.map((point) => ({ priceTon: point.priceTon }))
 }
 
 function primaryCropOf(strategy: RotationStrategy, plot: PlotSnapshot): string {
@@ -152,13 +145,13 @@ interface CropPriceData {
 // with 7 strategies that used to mean 90+ serial calls for what's really at most a handful of
 // distinct crops (defect (d)).
 async function fetchPriceDataByCrop(
-  crops: string[], municipality: string, asOfDate: string,
+  crops: string[], municipality: string, asOfDate: string, mode: 'rainfed' | 'irrigated',
 ): Promise<Map<string, CropPriceData>> {
   const distinctCrops = [...new Set(crops)]
   const entries = await Promise.all(distinctCrops.map(async (crop): Promise<[string, CropPriceData]> => {
     const [priceSnapshot, priceHistory] = await Promise.all([
-      pricesProvider.getSnapshot(crop, municipality, asOfDate),
-      fetchPriceHistory(crop, municipality, 12),
+      pricesProvider.getSnapshot(crop, municipality, asOfDate, mode),
+      fetchPriceHistory(crop, municipality),
     ])
     return [crop, { priceSnapshot, priceHistory }]
   }))
@@ -240,7 +233,6 @@ plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
     ])
     const seasons = seasonsSnapshot.docs.map((d) => d.data() as { year: number; crop: string })
     const catalog = catalogSnapshot.docs.map((d) => d.data() as CropCatalogEntry)
-    const staticProfile = await soilProvider.getStaticProfile(plot.center.lat, plot.center.lon)
     const indicators = await computeCurrentIndicators(plot, catalog)
 
     const modelSuccess: ModelSuccessResult = modeloClient
@@ -248,11 +240,20 @@ plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
       : { byCrop: {} }
 
     const strategies = generateStrategies({
-      plot, staticProfile, seasons, priorities: plot.priorities, indicators, catalog,
+      plot, seasons, priorities: plot.priorities, indicators, catalog,
       modelSuccessByCrop: Object.keys(modelSuccess.byCrop).length > 0 ? modelSuccess.byCrop : undefined,
       modelInfo: modelSuccess.info,
       modelUnavailableReason: modelSuccess.unavailableReason,
     } satisfies GenerateStrategiesInput)
+
+    // The declared area is never overwritten: an invalid stored boundary or a polygon whose
+    // surface disagrees with areaHa becomes a visible infoGap on every strategy in this batch.
+    const geometryInfo = analyzePlotGeometry(plot)
+    if (geometryInfo.infoGaps.length > 0) {
+      for (const strategy of strategies) {
+        strategy.infoGaps.push(...geometryInfo.infoGaps)
+      }
+    }
 
     let business: BusinessInputs | null = null
     if (businessSnapshot.exists) {
@@ -263,52 +264,62 @@ plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
     }
 
     const asOfDate = daysAgo(0)
-    // 12 points so the 10th-percentile "drop" scenario doesn't collapse to the same index (0)
-    // as the plain minimum "floor" uses when the plot is too large for the guaranteed-price
-    // floor — floor(0.1 * (n-1)) only moves off index 0 once n >= 11.
     const priceDataByCrop = await fetchPriceDataByCrop(
-      strategies.map((s) => primaryCropOf(s, plot)), plot.municipality, asOfDate,
+      strategies.map((s) => primaryCropOf(s, plot)), plot.municipality, asOfDate, plot.mode,
     )
 
     for (const strategy of strategies) {
       const primaryCrop = primaryCropOf(strategy, plot)
-      const catalogEntry = catalog.find((c) => c.id === primaryCrop)
       const { priceSnapshot, priceHistory } = priceDataByCrop.get(primaryCrop)!
 
-      strategy.evidence.push({
-        label: 'Rural average price', value: String(priceSnapshot.ruralAvgPriceKg), unit: 'MXN/kg',
-        period: asOfDate, provenance: priceSnapshot.provenance,
-      })
+      // SIAP is annual: the evidence period is the dataset year's closing date, not today.
+      if (priceSnapshot.ruralAvgPriceKg !== null && priceSnapshot.provenance) {
+        strategy.evidence.push({
+          label: 'Rural average price', value: String(priceSnapshot.ruralAvgPriceKg), unit: 'MXN/kg',
+          period: priceSnapshot.provenance.asOf, provenance: priceSnapshot.provenance,
+        })
+      }
+      strategy.infoGaps.push(...priceSnapshot.infoGaps)
 
-      const scenarioPrices = computeScenarioPrices({ ...priceSnapshot, areaHa: plot.areaHa }, priceHistory)
+      const scenarioPrices = computeScenarioPrices(
+        {
+          ruralAvgPriceKg: priceSnapshot.ruralAvgPriceKg,
+          wholesalePriceKg: priceSnapshot.wholesalePriceKg,
+          guaranteedPriceTon: priceSnapshot.guaranteedPriceTon,
+          areaHa: plot.areaHa,
+        },
+        priceHistory,
+      )
 
-      // The farmer's one business/current record is for a single crop — only apply it to the
-      // strategy whose primary crop matches; every other strategy (and this one, when there's
-      // no match) falls back to simulated per-hectare defaults, with the gap recorded.
-      let baseInputs: BusinessInputs
-      if (business && business.crop === primaryCrop) {
-        baseInputs = business
-      } else {
+      // The farmer's one business/current record is for a single crop. Without a valid record
+      // for this strategy's crop there is no economic result at all — default per-hectare costs
+      // are never invented to fill the block.
+      const businessForCrop = business && business.crop === primaryCrop ? business : null
+      if (!businessForCrop) {
         if (businessSnapshot.exists && !business) {
-          strategy.infoGaps.push('Stored business/current data is invalid — using simulated defaults.')
+          strategy.infoGaps.push(
+            'Stored business/current data is invalid — no economic result is shown rather than inventing costs.',
+          )
         } else if (!businessSnapshot.exists) {
-          strategy.infoGaps.push('No recorded business/current costs for this plot — using simulated defaults.')
+          strategy.infoGaps.push(
+            'No recorded business/current costs for this plot — register your costs to see an economic result.',
+          )
         } else if (business) {
           strategy.infoGaps.push(
-            `Recorded business costs are for "${business.crop}", not "${primaryCrop}" — using simulated defaults for this crop.`,
+            `Recorded business costs are for "${business.crop}", not "${primaryCrop}" — no economic result is shown for this crop.`,
           )
         }
-        baseInputs = defaultBusinessInputs(
-          primaryCrop, plot.areaHa, catalogEntry ? priceSnapshot.yieldTonHa : 0,
-        )
+        continue
       }
 
       for (const [scenario, priceTon] of Object.entries(scenarioPrices) as [RotationStrategy['economics'][number]['scenario'], number | null][]) {
         if (priceTon === null) {
-          strategy.infoGaps.push(`${scenario} price scenario has no value for this crop/area.`)
+          strategy.infoGaps.push(
+            `${scenario} price scenario has no real source for this crop/area, so it was left out.`,
+          )
           continue
         }
-        const result = computeEconomicResult({ ...baseInputs, priceTon })
+        const result = computeEconomicResult({ ...businessForCrop, priceTon })
         if (hasNullRatio(result)) {
           strategy.infoGaps.push(`${scenario} scenario: some economic ratios are undefined (zero production or price).`)
         }
@@ -339,27 +350,107 @@ plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
   }
 })
 
+async function loadLatestStrategies(plotId: string): Promise<RotationStrategy[]> {
+  const snapshot = await getAdminFirestore()
+    .collection(COLLECTIONS.strategies)
+    .where('plotId', '==', plotId)
+    .orderBy('generatedAt', 'desc')
+    .limit(20)
+    .get()
+
+  if (snapshot.empty) {
+    return []
+  }
+
+  const latestGeneratedAt = snapshot.docs[0].data().generatedAt
+  return snapshot.docs
+    .map((doc) => doc.data() as RotationStrategy)
+    .filter((strategy) => strategy.generatedAt === latestGeneratedAt)
+}
+
 plotsRouter.get('/plots/:id/rotations', async (req, res, next) => {
   try {
     await getPlotOrThrow(req.params.id)
-    const snapshot = await getAdminFirestore()
-      .collection(COLLECTIONS.strategies)
-      .where('plotId', '==', req.params.id)
-      .orderBy('generatedAt', 'desc')
-      .limit(20)
-      .get()
+    res.json({ strategies: await loadLatestStrategies(req.params.id) })
+  } catch (err) {
+    next(err)
+  }
+})
 
-    if (snapshot.empty) {
-      res.json({ strategies: [] })
-      return
+const MAX_VIA_QUESTION_LENGTH = 500
+
+function parseViaQuestion(body: unknown): string {
+  const question = (body as { question?: unknown } | null)?.question
+  if (typeof question !== 'string' || question.trim() === '') {
+    throw badRequest('question must be a non-empty string.')
+  }
+  const trimmed = question.trim()
+  if (trimmed.length > MAX_VIA_QUESTION_LENGTH) {
+    throw badRequest(`question must be at most ${MAX_VIA_QUESTION_LENGTH} characters.`)
+  }
+  return trimmed
+}
+
+// VÍA is a plot-scoped assistant: /plots/:id/via/ask keeps plotOwnerAuth's owner check, and the
+// answer is built only from this plot's stored/derived data.
+plotsRouter.post('/plots/:id/via/ask', async (req, res, next) => {
+  try {
+    const question = parseViaQuestion(req.body)
+    const intent = classifyIntent(question)
+    const plot = await getPlotOrThrow(req.params.id)
+    const context: ViaContext = { plot }
+
+    if (intent === 'water' || intent === 'soilMoisture' || intent === 'temperature' || intent === 'ndvi') {
+      const catalogSnapshot = await getAdminFirestore().collection(COLLECTIONS.cropCatalog).get()
+      const catalog = catalogSnapshot.docs.map((doc) => doc.data() as CropCatalogEntry)
+      context.indicators = await computeCurrentIndicators(plot, catalog)
     }
 
-    const latestGeneratedAt = snapshot.docs[0].data().generatedAt
-    const strategies = snapshot.docs
-      .map((d) => d.data())
-      .filter((s) => s.generatedAt === latestGeneratedAt)
+    if (intent === 'strategies') {
+      context.strategies = await loadLatestStrategies(req.params.id)
+    }
 
-    res.json({ strategies })
+    if (intent === 'economics') {
+      const businessSnapshot = await getAdminFirestore()
+        .doc(COLLECTIONS.plotBusinessCurrent(req.params.id))
+        .get()
+      context.business = null
+      if (businessSnapshot.exists) {
+        const validated = validateBusinessInputs(businessSnapshot.data() as Record<string, unknown>)
+        if (validated.ok) {
+          context.business = validated.value
+        } else {
+          context.businessErrors = validated.errors
+        }
+      }
+    }
+
+    if (intent === 'market') {
+      context.price = await pricesProvider.getSnapshot(
+        plot.currentCrop, plot.municipality, daysAgo(0), plot.mode,
+      )
+    }
+
+    const answer = buildViaAnswer(intent, context)
+
+    // Optional AI rewriting: only accepted when every figure it returns is already in the
+    // evidence. Otherwise the verified template answer is returned untouched.
+    if (viaAnswerPolisher) {
+      const polished = await viaAnswerPolisher.polish({
+        question, answer: answer.answer, evidence: answer.evidence,
+      })
+      if (polished !== null) {
+        if (findUnsupportedNumbers(polished, answer.evidence).length === 0) {
+          answer.answer = polished
+        } else {
+          answer.infoGaps.push(
+            'AI rewriting was discarded because it introduced figures not present in the evidence.',
+          )
+        }
+      }
+    }
+
+    res.json(answer)
   } catch (err) {
     next(err)
   }
