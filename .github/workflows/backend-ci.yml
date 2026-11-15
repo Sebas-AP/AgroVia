@@ -16,7 +16,8 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: "temurin"
-          java-version: "17"
+          # firebase-tools (for the Firestore/Auth emulators below) requires JDK 21+.
+          java-version: "21"
         if: hashFiles('Backend/package.json') != ''
       - run: scripts/lint-folder.sh Backend package.json npm ci
       # Scoped to src/tests (same as `npm run lint`), not `eslint .` — eslint.config.cjs itself
