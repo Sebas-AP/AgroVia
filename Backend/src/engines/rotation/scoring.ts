@@ -69,13 +69,31 @@ export function scoreMarket(priorities: PlotPriorities): number {
   return ECONOMIC_PROXY_BASE * (priorities.market / 5)
 }
 
+// ASSUMPTION: like climateRisk/pests above, no PlotPriorities field maps to the model's
+// predicted success probability, so it passes through unweighted (weight 1) — same precedent,
+// not a new rule invented for this criterion.
+export function scoreModelSuccess(
+  sequence: { crop: string }[],
+  modelSuccessByCrop: Record<string, number> | undefined,
+): number | undefined {
+  if (!modelSuccessByCrop) {
+    return undefined
+  }
+  const probabilities = sequence
+    .map((s) => modelSuccessByCrop[s.crop])
+    .filter((p): p is number => typeof p === 'number')
+  return probabilities.length === 0 ? undefined : average(probabilities) * 100
+}
+
 export function combineScores(
   crops: CropCatalogEntry[],
   sequence: { crop: string }[],
   staticProfile: StaticSoilProfile,
   indicators: PlotIndicators,
   priorities: PlotPriorities,
+  modelSuccessByCrop?: Record<string, number>,
 ): { scores: StrategyScores; totalScore: number } {
+  const modelSuccess = scoreModelSuccess(sequence, modelSuccessByCrop)
   const scores: StrategyScores = {
     water: scoreWater(crops, priorities),
     soil: scoreSoil(crops, staticProfile, priorities),
@@ -83,6 +101,7 @@ export function combineScores(
     pests: scorePests(sequence),
     economy: scoreEconomy(priorities),
     market: scoreMarket(priorities),
+    ...(modelSuccess === undefined ? {} : { modelSuccess }),
   }
   const totalScore = average(Object.values(scores))
   return { scores, totalScore }

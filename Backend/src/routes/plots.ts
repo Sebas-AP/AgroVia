@@ -13,6 +13,8 @@ import { SimulatedNdviProvider, ModeloNdviProvider, type NdviProvider } from '..
 import { SimulatedSoilProvider } from '../providers/SoilProvider'
 import { SimulatedPricesProvider, type PricesProvider } from '../providers/PricesProvider'
 import { ModeloClient } from '../integration/modeloClient'
+import { toModeloCropId } from '../integration/modeloCropIds'
+import type { GenerateStrategiesInput } from '../engines/rotation'
 import type { PlotSnapshot, CropCatalogEntry } from '../types/firestoreDocs'
 import type { BusinessInputs } from '../types/business'
 import type { RotationStrategy } from '../types/strategy'
@@ -33,9 +35,10 @@ const pricesProvider = new SimulatedPricesProvider()
 // catalogue doesn't carry the rotation-scoring fields cropCatalog needs). Never silently
 // decided here: this file just reflects what's actually implemented.
 const useSimulatedProviders = process.env.USE_SIMULATED_PROVIDERS !== 'false'
-const ndviProvider: NdviProvider = (!useSimulatedProviders && process.env.MODELO_BASE_URL)
-  ? new ModeloNdviProvider(new ModeloClient({ baseUrl: process.env.MODELO_BASE_URL }))
-  : new SimulatedNdviProvider()
+const modeloClient = (!useSimulatedProviders && process.env.MODELO_BASE_URL)
+  ? new ModeloClient({ baseUrl: process.env.MODELO_BASE_URL })
+  : null
+const ndviProvider: NdviProvider = modeloClient ? new ModeloNdviProvider(modeloClient) : new SimulatedNdviProvider()
 
 async function getPlotOrThrow(id: string): Promise<PlotSnapshot> {
   const doc = await getAdminFirestore().collection(COLLECTIONS.plots).doc(id).get()
@@ -162,6 +165,69 @@ async function fetchPriceDataByCrop(
   return new Map(entries)
 }
 
+interface ModelSuccessResult {
+  byCrop: Record<string, number>
+  info?: { name: string; version: string }
+  unavailableReason?: string
+}
+
+// Modelo's prediction is trained to evaluate a crop against a window of real NASA POWER
+// climate, not to forecast an unplanted future rotation — there's no real sowing date or
+// cycle-specific window for an "alternative" strategy. ASSUMPTION: the last 30 days' aggregate
+// (the same real window the indicators engine already fetched climate for) stands in as
+// "current regional conditions" for every candidate crop, documented here for review rather
+// than silently treated as a true per-cycle forecast.
+async function fetchModelSuccessByCrop(
+  plot: PlotSnapshot, catalog: CropCatalogEntry[], client: ModeloClient,
+): Promise<ModelSuccessResult> {
+  const to = daysAgo(0)
+  const from = daysAgo(30)
+  let clima
+  let municipio
+  try {
+    [clima, municipio] = await Promise.all([
+      client.clima({ latitud: plot.center.lat, longitud: plot.center.lon, inicio: from, fin: to }),
+      client.municipio(plot.center.lat, plot.center.lon),
+    ])
+  } catch (err) {
+    return { byCrop: {}, unavailableReason: `Modelo did not respond: ${String(err)}` }
+  }
+
+  const modalidad = plot.mode === 'irrigated' ? 'riego' : 'temporal'
+  const predictions = await Promise.all(catalog.map(async (crop) => {
+    const modeloCropId = toModeloCropId(crop.id)
+    if (!modeloCropId) {
+      return null
+    }
+    try {
+      const result = await client.predecir({
+        cultivo_id: modeloCropId, modalidad, cve_mun: municipio.cve_mun,
+        lluvia_ciclo_mm: clima.lluvia_ciclo_mm, temp_media_c: clima.temp_media_c,
+        temp_max_c: clima.temp_max_c, temp_min_extrema_c: clima.temp_min_extrema_c,
+        radiacion_mj_m2: clima.radiacion_mj_m2,
+      })
+      return { backendCropId: crop.id, result }
+    } catch {
+      return null
+    }
+  }))
+
+  const byCrop: Record<string, number> = {}
+  let info: ModelSuccessResult['info']
+  for (const prediction of predictions) {
+    if (prediction) {
+      byCrop[prediction.backendCropId] = prediction.result.probabilidad_exito
+      // EvaluacionModelo has no separate semantic-version field; the joblib filename it does
+      // return is the only per-prediction identifier Modelo actually provides.
+      info = { name: 'modelo-agrovia', version: prediction.result.modelo }
+    }
+  }
+  if (Object.keys(byCrop).length === 0) {
+    return { byCrop, unavailableReason: 'Modelo returned no usable prediction for any crop in the catalog.' }
+  }
+  return { byCrop, info }
+}
+
 plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
   try {
     const plot = await getPlotOrThrow(req.params.id)
@@ -177,9 +243,16 @@ plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
     const staticProfile = await soilProvider.getStaticProfile(plot.center.lat, plot.center.lon)
     const indicators = await computeCurrentIndicators(plot, catalog)
 
+    const modelSuccess: ModelSuccessResult = modeloClient
+      ? await fetchModelSuccessByCrop(plot, catalog, modeloClient)
+      : { byCrop: {} }
+
     const strategies = generateStrategies({
       plot, staticProfile, seasons, priorities: plot.priorities, indicators, catalog,
-    })
+      modelSuccessByCrop: Object.keys(modelSuccess.byCrop).length > 0 ? modelSuccess.byCrop : undefined,
+      modelInfo: modelSuccess.info,
+      modelUnavailableReason: modelSuccess.unavailableReason,
+    } satisfies GenerateStrategiesInput)
 
     let business: BusinessInputs | null = null
     if (businessSnapshot.exists) {

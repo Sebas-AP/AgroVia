@@ -35,6 +35,15 @@ export interface GenerateStrategiesInput {
   // Caps the O(n^2) pairwise alternatives generated from the compatible-crop list, keeping the
   // best `maxAlternatives` by totalScore (defect (e)). Default 5.
   maxAlternatives?: number
+  // Modelo-predicted harvest-success probability per Backend crop id (routes/plots.ts resolves
+  // this over HTTP before calling generateStrategies — this module stays a pure, synchronous
+  // function). Absent entirely when Modelo wasn't reachable; per-crop entries are only present
+  // for crops the model actually answered for.
+  modelSuccessByCrop?: Record<string, number>
+  modelInfo?: { name: string; version: string }
+  // Set when Modelo was reachable in general but produced no usable modelSuccessByCrop at all —
+  // recorded in every strategy's infoGaps rather than silently dropping the criterion.
+  modelUnavailableReason?: string
 }
 
 function lookupCrops(
@@ -117,6 +126,12 @@ function buildIndicatorEvidence(indicators: PlotIndicators, infoGaps: string[]):
   return evidence
 }
 
+interface ModelContext {
+  successByCrop?: Record<string, number>
+  info?: { name: string; version: string }
+  unavailableReason?: string
+}
+
 function buildStrategy(
   id: string,
   type: RotationStrategy['type'],
@@ -128,12 +143,30 @@ function buildStrategy(
   indicators: PlotIndicators,
   priorities: PlotPriorities,
   waterAvailability: PlotSnapshot['constraints']['waterAvailability'],
+  model: ModelContext,
 ): RotationStrategy {
   const crops = lookupCrops(sequence.map((s) => s.crop), catalog, infoGaps)
   if (crops.length === 0) {
     infoGaps.push('No crop in this sequence matched the catalog — the water/soil scores below are not meaningful (shown as 0).')
   }
-  const { scores, totalScore } = combineScores(crops, sequence, staticProfile, indicators, priorities)
+  const { scores, totalScore } = combineScores(
+    crops, sequence, staticProfile, indicators, priorities, model.successByCrop,
+  )
+  const evidence = buildIndicatorEvidence(indicators, infoGaps)
+  if (scores.modelSuccess !== undefined && model.info) {
+    evidence.push({
+      label: 'Modelo-predicted harvest-success probability',
+      value: String(Math.round(scores.modelSuccess) / 100),
+      unit: 'probability',
+      period: indicators.asOf,
+      provenance: {
+        source: 'modelo-agrovia', product: model.info.name, version: model.info.version,
+        asOf: indicators.asOf, latencyDays: 0, kind: 'estimated', origin: 'real',
+      },
+    })
+  } else if (model.unavailableReason) {
+    infoGaps.push(`modelSuccess criterion omitted: ${model.unavailableReason}`)
+  }
   const sequenceText = sequence.map((s) => `${s.crop} (${s.year})`).join(' -> ')
 
   return {
@@ -141,7 +174,7 @@ function buildStrategy(
     type,
     sequence,
     rationale,
-    evidence: buildIndicatorEvidence(indicators, infoGaps),
+    evidence,
     benefits: buildBenefits(crops, waterAvailability),
     // Price-based evidence/economics are filled by the rotations route (Task 10), which also has
     // the economics engine (Task 9) and the farmer's real business inputs — neither is available
@@ -163,6 +196,14 @@ function buildStrategy(
   }
 }
 
+function modelContextFrom(input: GenerateStrategiesInput): ModelContext {
+  return {
+    successByCrop: input.modelSuccessByCrop,
+    info: input.modelInfo,
+    unavailableReason: input.modelSuccessByCrop === undefined ? input.modelUnavailableReason : undefined,
+  }
+}
+
 function buildCurrentStrategy(input: GenerateStrategiesInput): RotationStrategy {
   const infoGaps: string[] = []
   let sequence = [...input.seasons].sort((a, b) => a.year - b.year).map((s) => ({ year: s.year, crop: s.crop }))
@@ -177,7 +218,7 @@ function buildCurrentStrategy(input: GenerateStrategiesInput): RotationStrategy 
     'current', 'current', sequence,
     'Reconstructed from this plot\'s recorded season history.',
     infoGaps, input.catalog, input.staticProfile, input.indicators, input.priorities,
-    input.plot.constraints.waterAvailability,
+    input.plot.constraints.waterAvailability, modelContextFrom(input),
   )
 }
 
@@ -210,7 +251,7 @@ function buildAlternativeStrategies(input: GenerateStrategiesInput): RotationStr
         id, 'alternative', sequence,
         `Alternates ${cropA.name} and ${cropB.name}, both compatible with this plot's declared water availability.`,
         [], input.catalog, input.staticProfile, input.indicators, input.priorities,
-        input.plot.constraints.waterAvailability,
+        input.plot.constraints.waterAvailability, modelContextFrom(input),
       ))
     }
   }

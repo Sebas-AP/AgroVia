@@ -116,6 +116,35 @@ describe('generateStrategies', () => {
     expect(altHighWater.benefits.join(' ')).not.toMatch(/drought-tolerant/)
   })
 
+  it('adds a modelSuccess score and a modelo-agrovia evidence entry when model predictions are supplied', () => {
+    const input = demoRotationInput()
+    const strategies = generateStrategies({
+      ...input,
+      modelSuccessByCrop: { corn: 0.8, beans: 0.6, 'forage-oats': 0.5, 'forage-sorghum': 0.5 },
+      modelInfo: { name: 'modelo-agrovia', version: 'modelo_agrovia.joblib' },
+    })
+    for (const strategy of strategies) {
+      expect(strategy.scores.modelSuccess).toBeGreaterThan(0)
+      const evidence = strategy.evidence.find((e) => e.provenance.source === 'modelo-agrovia')
+      expect(evidence).toBeDefined()
+      expect(evidence!.provenance.version).toBe('modelo_agrovia.joblib')
+    }
+  })
+
+  it('keeps generating every strategy, with modelSuccess omitted and the gap recorded, when Modelo is down', () => {
+    const input = demoRotationInput()
+    const strategies = generateStrategies({
+      ...input,
+      modelUnavailableReason: 'Modelo did not respond: ECONNREFUSED',
+    })
+    expect(strategies.length).toBeGreaterThanOrEqual(3)
+    for (const strategy of strategies) {
+      expect(strategy.scores.modelSuccess).toBeUndefined()
+      expect(strategy.evidence.some((e) => e.provenance.source === 'modelo-agrovia')).toBe(false)
+      expect(strategy.infoGaps.join(' ')).toMatch(/modelSuccess criterion omitted.*ECONNREFUSED/)
+    }
+  })
+
   it('records an infoGap instead of fabricating evidence when a period has no climate/soil-moisture provenance', () => {
     const input = demoRotationInput()
     const strategies = generateStrategies({

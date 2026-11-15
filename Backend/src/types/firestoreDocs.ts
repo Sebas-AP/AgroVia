@@ -46,6 +46,11 @@ export interface StrategyScores {
   pests: number
   economy: number
   market: number
+  // Omitted (not merely null) when the Modelo prediction service didn't respond for any crop in
+  // this sequence — the other scores stay valid either way (defect/criterion in INTEGRACION.md
+  // section 2). Object.values(scores) already skips an absent key, so totalScore's average is
+  // unaffected by its presence or absence.
+  modelSuccess?: number
 }
 
 export interface PlotIndicators {
