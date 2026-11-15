@@ -2,4 +2,7 @@
 *.onnx filter=lfs diff=lfs merge=lfs -text
 *.h5 filter=lfs diff=lfs merge=lfs -text
 *.pkl filter=lfs diff=lfs merge=lfs -text
-*.joblib filter=lfs diff=lfs merge=lfs -text
+# *.joblib intentionally NOT LFS-tracked: modelo_agrovia.joblib (506 KB) was already committed as
+# a normal blob across multiple merged commits before this was noticed. Migrating it into LFS now
+# would require rewriting that history and force-pushing main — not worth it for a file this
+# small. See INTEGRACION.md defect (j).
