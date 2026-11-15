@@ -86,7 +86,7 @@ export class AnthropicAnswerPolisher implements AnswerPolisher {
 }
 
 const NVIDIA_CHAT_URL = 'https://integrate.api.nvidia.com/v1/chat/completions'
-const NVIDIA_DEFAULT_MODEL = 'meta/llama-3.1-8b-instruct'
+const NVIDIA_DEFAULT_MODEL = 'nvidia/nemotron-3.5-bolt-e4b'
 
 interface NvidiaResponse {
   choices?: { message?: { content?: string } }[]
