@@ -18,11 +18,14 @@ from .config import DEFAULT_PARCEL_EXAMPLE
 from .errors import EvaluationError
 from .schemas import (
     NDVIMODIS,
+    ClimaDiario,
     ClimaNASA,
     CultivoInfo,
     EvaluacionModelo,
     MunicipioDetectado,
     ParcelaInput,
+    PreciosInput,
+    PreciosSIAP,
     PrediccionInput,
     RespuestaEvaluacion,
     VentanaInput,
@@ -115,6 +118,17 @@ def clima(
     )
 
 
+@app.post("/api/v1/clima/diario", response_model=ClimaDiario)
+def clima_diario(
+    ventana: VentanaInput,
+    service: Annotated[AgroViaService, Depends(get_service)],
+) -> ClimaDiario:
+    """Real per-day NASA POWER values for the window — see service.fetch_daily_climate_window."""
+    return _run_with_upstream_errors(
+        lambda: service.fetch_daily_climate_window(ventana.latitud, ventana.longitud, ventana.inicio, ventana.fin)
+    )
+
+
 @app.post("/api/v1/ndvi", response_model=NDVIMODIS)
 def ndvi(
     ventana: VentanaInput,
@@ -133,6 +147,15 @@ def predecir(
 ) -> EvaluacionModelo:
     """Runs the trained model directly on an already-resolved feature set."""
     return service.predict_from_features(payload)
+
+
+@app.post("/api/v1/precios", response_model=PreciosSIAP)
+def precios(
+    payload: PreciosInput,
+    service: Annotated[AgroViaService, Depends(get_service)],
+) -> PreciosSIAP:
+    """Real SIAP municipal price/yield rows for one crop — see agrovia_api/prices.py."""
+    return service.fetch_prices(payload)
 
 
 @app.get("/api/v1/municipio", response_model=MunicipioDetectado)

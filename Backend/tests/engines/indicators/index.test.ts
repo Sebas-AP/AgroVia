@@ -66,4 +66,34 @@ describe('computeIndicators', () => {
     expect(result.airTempMin).toBeNull()
     expect(result.relativeHumidityAvg).toBeNull()
   })
+
+  it('keeps the last reported soil moisture when the final day has no reading', () => {
+    const input = buildInput()
+    input.soilMoisture[2].smSurface = null
+    input.soilMoisture[2].smRootzone = null
+    const result = computeIndicators(input)
+    // Days 1 and 2 both reported 0.2/0.25; the missing day 3 must not erase that observation.
+    expect(result.surfaceSoilMoisture).toBe(0.2)
+    expect(result.rootZoneSoilMoisture).toBe(0.25)
+  })
+
+  it('reports null soil moisture when no day in the window reported a value', () => {
+    const input = buildInput()
+    for (const day of input.soilMoisture) {
+      day.smSurface = null
+      day.smRootzone = null
+    }
+    const result = computeIndicators(input)
+    expect(result.surfaceSoilMoisture).toBeNull()
+    expect(result.rootZoneSoilMoisture).toBeNull()
+  })
+
+  it('reports null moisture anomaly when the percentile series is unavailable', () => {
+    const input = buildInput()
+    for (const day of input.soilMoisture) {
+      day.smRootzonePctl = null
+    }
+    const result = computeIndicators(input)
+    expect(result.moistureAnomalyPctl).toBeNull()
+  })
 })

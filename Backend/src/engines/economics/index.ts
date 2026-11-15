@@ -48,13 +48,20 @@ function percentile(values: number[], p: number): number {
 }
 
 export function computeScenarioPrices(
-  crop: { ruralAvgPriceKg: number; wholesalePriceKg: number; guaranteedPriceTon: number | null; areaHa: number },
+  crop: {
+    ruralAvgPriceKg: number | null
+    wholesalePriceKg: number | null
+    guaranteedPriceTon: number | null
+    areaHa: number
+  },
   priceHistory: { priceTon: number }[],
   discountPct: number = DEFAULT_OPTIMISTIC_DISCOUNT_PCT,
 ): Record<PriceScenario, number | null> {
   const history = priceHistory.map((p) => p.priceTon)
   const qualifiesForFloor = crop.areaHa <= SMALL_PRODUCER_LIMIT_HA && crop.guaranteedPriceTon !== null
 
+  // With no DOF guarantee, the floor is the worst year in the real history; with no history and
+  // no guarantee, there is no floor to report (null, never a made-up number).
   const floor = qualifiesForFloor
     ? crop.guaranteedPriceTon
     : (history.length > 0 ? Math.min(...history) : null)
@@ -63,12 +70,18 @@ export function computeScenarioPrices(
   // in the worst-case scenario, so `drop` must never fall below it. In the non-qualifying branch
   // this already holds (floor is the history's own min, <= any percentile of that same history);
   // this clamp is the one that matters when the guaranteed price applies.
-  const drop = floor === null ? historicalDrop : Math.max(historicalDrop ?? floor, floor)
+  const drop = floor === null
+    ? historicalDrop
+    : Math.max(historicalDrop ?? floor, floor)
 
   return {
     floor,
-    average: crop.ruralAvgPriceKg * 1000,
-    optimistic: crop.wholesalePriceKg * 1000 * (1 - discountPct),
+    average: crop.ruralAvgPriceKg === null ? null : crop.ruralAvgPriceKg * 1000,
+    // No SNIIM wholesale source is connected, so the optimistic scenario stays null rather than
+    // reusing the rural price with an invented markup.
+    optimistic: crop.wholesalePriceKg === null
+      ? null
+      : crop.wholesalePriceKg * 1000 * (1 - discountPct),
     drop,
   }
 }

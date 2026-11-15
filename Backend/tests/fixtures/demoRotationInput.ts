@@ -62,14 +62,9 @@ const DEFAULT_INDICATORS: PlotIndicators = {
     source: 'test', product: 'test', version: 'v1', asOf: '2026-01-31', latencyDays: 0,
     kind: 'estimated', origin: 'simulated',
   },
-}
-
-const DEFAULT_STATIC_PROFILE = {
-  slopeDegrees: 5, sandPct: 40, siltPct: 30, clayPct: 30, organicCarbon: 1.5, pH: 7, cec: 15,
-  waterRetentionMm: 120,
-  provenance: {
-    source: 'test', product: 'test', version: 'v1', asOf: '2026-01-01', latencyDays: 0,
-    kind: 'estimated' as const, origin: 'simulated' as const,
+  ndviProvenance: {
+    source: 'test', product: 'test', version: 'v1', asOf: '2026-01-31', latencyDays: 0,
+    kind: 'satelliteObservation', origin: 'simulated',
   },
 }
 
@@ -81,7 +76,6 @@ export function demoRotationInput(
 ): GenerateStrategiesInput {
   return {
     plot: DEFAULT_PLOT,
-    staticProfile: DEFAULT_STATIC_PROFILE,
     seasons: overrides.seasons ?? DEFAULT_SEASONS,
     priorities: { ...DEFAULT_PRIORITIES, ...overrides.priorities },
     indicators: DEFAULT_INDICATORS,

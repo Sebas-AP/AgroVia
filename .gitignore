@@ -9,6 +9,9 @@
 AppMovil/**/build/
 AppMovil/**/.gradle/
 AppMovil/**/local.properties
+AppMovil/.idea/
+AppMovil/**/.kotlin/
+AppMovil/**/*.iml
 
 # Node (Backend)
 Backend/node_modules/

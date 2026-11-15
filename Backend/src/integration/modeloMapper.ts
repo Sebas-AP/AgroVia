@@ -1,5 +1,6 @@
 import type { PlotSnapshot } from '../types/firestoreDocs'
 import type { ParcelaInput } from './modeloTypes'
+import { plotPointForLookup } from '../geo/plotGeometry'
 
 export interface SowingEvent {
   date: string // YYYY-MM-DD
@@ -44,9 +45,13 @@ export function toParcelaInput(input: ModeloMapperInput): ParcelaInput {
     throw new Error(`Cannot map plot "${plot.name}" to a Modelo ParcelaInput — missing: ${missing.join(', ')}.`)
   }
 
+  // Use the polygon centroid when the plot has a valid boundary; Modelo's point-based lookup is
+  // more meaningful there than at a hand-entered center that may sit outside the actual field.
+  const point = plotPointForLookup(plot)
+
   return {
-    latitud: plot.center.lat,
-    longitud: plot.center.lon,
+    latitud: point.lat,
+    longitud: point.lon,
     superficie_hectareas: plot.areaHa,
     tipo_terreno: plot.terrainType as string,
     tipo_suelo: plot.declaredSoilType,

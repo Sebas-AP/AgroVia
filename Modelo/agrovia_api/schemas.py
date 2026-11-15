@@ -66,10 +66,58 @@ class PrediccionInput(BaseModel):
     radiacion_mj_m2: float
 
 
+class PreciosInput(BaseModel):
+    """Input for POST /api/v1/precios: one Modelo crop id and a Durango municipality name."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cultivo_id: str = Field(..., min_length=1)
+    municipio: str = Field(..., min_length=1)
+    anio: int | None = Field(default=None, ge=1900, le=2100)
+
+
+class PrecioRegistro(BaseModel):
+    """One real SIAP row. An absent source field stays None; it is never zero-filled."""
+
+    anio: int
+    ciclo: str | None
+    modalidad: str | None
+    precio_mxn_t: float | None
+    rendimiento_t_ha: float | None
+    volumen_t: float | None
+    superficie_cosechada_ha: float | None
+
+
+class PreciosSIAP(BaseModel):
+    fuente: str
+    version: str
+    cultivo_id: str
+    municipio: str
+    anio_ultimo: int | None
+    registros: list[PrecioRegistro]
+    advertencias: list[str]
+
+
 class MunicipioDetectado(BaseModel):
     cve_mun: int
     municipio: str
     distancia_km: float
+
+
+class PuntoClima(BaseModel):
+    """One real NASA POWER day. `valores` only has the parameters that actually had a usable
+    reading that day — a missing one is just absent, never filled in or interpolated."""
+
+    fecha: date
+    valores: dict[str, float]
+
+
+class ClimaDiario(BaseModel):
+    fuente: str
+    ventana_inicio: date
+    ventana_fin: date
+    parametros: list[str]
+    serie: list[PuntoClima]
 
 
 class CultivoInfo(BaseModel):

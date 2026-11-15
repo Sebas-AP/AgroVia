@@ -79,6 +79,34 @@ def test_clima_reuses_the_cache_warmed_by_evaluar_parcela(
     assert len(climate.calls) == calls_after_composite
 
 
+def test_clima_diario_returns_the_real_per_day_series(client: TestClient) -> None:
+    response = client.post("/api/v1/clima/diario", json=VENTANA)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["serie"][0]["fecha"] == "2026-06-15"
+    assert body["serie"][0]["valores"]["RH2M"] == 41.0
+    assert "RH2M" not in body["serie"][1]["valores"]
+
+
+def test_clima_diario_does_not_share_the_aggregate_endpoints_cache(
+    client: TestClient, service_and_fakes: tuple[AgroViaService, FakeClimateClient, FakeNDVIClient],
+) -> None:
+    _, climate, _ = service_and_fakes
+    client.post("/api/v1/clima", json=VENTANA)
+    response = client.post("/api/v1/clima/diario", json=VENTANA)
+    assert response.status_code == 200
+    assert len(climate.daily_calls) == 1  # its own request, not served from /clima's cache
+
+
+def test_clima_diario_maps_a_nasa_failure_with_nothing_cached_to_502(
+    client: TestClient, service_and_fakes: tuple[AgroViaService, FakeClimateClient, FakeNDVIClient],
+) -> None:
+    _, climate, _ = service_and_fakes
+    climate.daily_error = NasaPowerError("NASA POWER unavailable")
+    response = client.post("/api/v1/clima/diario", json=VENTANA)
+    assert response.status_code == 502
+
+
 def test_ndvi_returns_the_series_for_the_window(client: TestClient) -> None:
     response = client.post("/api/v1/ndvi", json=VENTANA)
     assert response.status_code == 200
@@ -147,3 +175,39 @@ def test_cultivos_returns_the_full_inifap_catalogue(client: TestClient) -> None:
     body = response.json()
     assert len(body) == len(load_crops())
     assert all({"cultivo_id", "nombre", "modalidad_recomendada"} <= set(entry) for entry in body)
+
+
+def test_precios_returns_real_siap_rows(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/precios",
+        json={"cultivo_id": "maiz_grano", "municipio": "Guadalupe Victoria"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["fuente"].startswith("SIAP")
+    assert body["anio_ultimo"] >= 2024
+    assert body["municipio"] == "Guadalupe Victoria"
+    assert body["registros"]
+    assert all("precio_mxn_t" in row for row in body["registros"])
+
+
+def test_precios_returns_an_explained_empty_result_for_an_unknown_municipality(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/v1/precios",
+        json={"cultivo_id": "maiz_grano", "municipio": "Nowhere"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["registros"] == []
+    assert body["anio_ultimo"] is None
+    assert "No SIAP record" in body["advertencias"][0]
+
+
+def test_precios_rejects_an_extra_field(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/precios",
+        json={"cultivo_id": "maiz_grano", "municipio": "Guadalupe Victoria", "extra": "nope"},
+    )
+    assert response.status_code == 422

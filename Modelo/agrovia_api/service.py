@@ -15,22 +15,27 @@ from .agronomy import (
 )
 from .cache import TTLCache
 from .catalogs import load_crops, load_municipalities
-from .clients.nasa_power import ClimateAggregate, NasaPowerClient
+from .clients.nasa_power import ClimateAggregate, ClimateDailyPoint, NasaPowerClient
 from .clients.ornl_modis import NDVISeries, OrnlMODISClient, OrnlMODISError
 from .config import CLIMATE_CACHE_TTL_SECONDS, MODEL_PATH, NDVI_CACHE_TTL_SECONDS
 from .errors import InvalidCropError, InvalidModalityError, InvalidParcelError
 from .geo import nearest_municipality
 from .model_runner import ModelRunner, classify_probability
+from .prices import SiapPriceDataset, load_price_dataset, lookup_prices
 from .schemas import (
     NDVIMODIS,
+    ClimaDiario,
     ClimaNASA,
     CultivoInfo,
     EvaluacionAgronomica,
     EvaluacionModelo,
     MunicipioDetectado,
     ParcelaInput,
+    PreciosInput,
+    PreciosSIAP,
     PrediccionInput,
     PuntajeVariable,
+    PuntoClima,
     PuntoNDVI,
     RespuestaEvaluacion,
     VentanaAnalisis,
@@ -74,6 +79,8 @@ class AgroViaService:
         today: date | None = None,
         climate_cache: TTLCache[ClimateAggregate] | None = None,
         ndvi_cache: TTLCache[NDVISeries] | None = None,
+        daily_climate_cache: TTLCache[list[ClimateDailyPoint]] | None = None,
+        prices: SiapPriceDataset | None = None,
     ) -> None:
         self._climate_client = climate_client
         self._ndvi_client = ndvi_client
@@ -83,6 +90,12 @@ class AgroViaService:
         self._today = today
         self._climate_cache = climate_cache or TTLCache[ClimateAggregate](CLIMATE_CACHE_TTL_SECONDS)
         self._ndvi_cache = ndvi_cache or TTLCache[NDVISeries](NDVI_CACHE_TTL_SECONDS)
+        # Same TTL as the aggregate cache, same (lat, lon, window) key — a separate cache
+        # because the cached value shape differs (a day list, not one aggregate).
+        self._daily_climate_cache = daily_climate_cache or TTLCache[list[ClimateDailyPoint]](
+            CLIMATE_CACHE_TTL_SECONDS
+        )
+        self._prices = prices or load_price_dataset()
 
     def evaluate(self, parcela: ParcelaInput) -> RespuestaEvaluacion:
         today = self._today or date.today()
@@ -311,6 +324,35 @@ class AgroViaService:
             radiacion_mj_m2=climate.radiacion_mj_m2,
         )
 
+    def fetch_daily_climate_window(
+        self, latitud: float, longitud: float, inicio: date, fin: date,
+    ) -> ClimaDiario:
+        """Narrow route backing POST /api/v1/clima/diario — the real per-day NASA POWER values
+        fetch_cycle discards after aggregating, for consumers that need true daily granularity
+        (the Backend's ModeloClimateProvider / indicators engine) instead of one window average.
+        Does not touch fetch_climate_window/_fetch_climate or their cache; completely separate
+        request and cache, by design (see nasa_power.py)."""
+        key = self._window_key(latitud, longitud, inicio, fin)
+        points = self._daily_climate_cache.get(key)
+        if points is None:
+            try:
+                points = self._climate_client.fetch_daily_series(latitud, longitud, inicio, fin)
+            except Exception:
+                stale = self._daily_climate_cache.get_stale(key)
+                if stale is None:
+                    raise
+                points = stale
+            else:
+                self._daily_climate_cache.set(key, points)
+
+        return ClimaDiario(
+            fuente="NASA POWER daily point (community AG)",
+            ventana_inicio=inicio,
+            ventana_fin=fin,
+            parametros=sorted({name for point in points for name in point.valores}),
+            serie=[PuntoClima(fecha=point.fecha, valores=point.valores) for point in points],
+        )
+
     def fetch_ndvi_window(
         self, latitud: float, longitud: float, inicio: date, fin: date,
     ) -> NDVIMODIS:
@@ -346,6 +388,11 @@ class AgroViaService:
             clase_predicha=predicted_class,
             clasificacion=classify_probability(probability),
         )
+
+    def fetch_prices(self, payload: PreciosInput) -> PreciosSIAP:
+        """Narrow route backing POST /api/v1/precios. Real SIAP rows only; an unknown
+        crop/municipality returns an empty, explained result rather than a substitute value."""
+        return lookup_prices(self._prices, payload.cultivo_id, payload.municipio, payload.anio)
 
     def detect_municipality(self, latitud: float, longitud: float) -> MunicipioDetectado:
         """Narrow route backing GET /api/v1/municipio."""

@@ -58,6 +58,54 @@ Content-Type: application/json
   "priceTon": 4200
 }
 
+### Ask the VÍA assistant about this plot — needs the owner's token
+# The answer is built only from this plot's stored/derived data, by templates: every number in
+# `answer` also appears in `evidence` (same value string), and a question outside the supported
+# intents returns `intent: "unknown"` with no figures. `infoGaps` lists what is missing.
+POST {{backendUrl}}/plots/{{plotId}}/via/ask
+Authorization: Bearer {{idToken}}
+Content-Type: application/json
+
+{
+  "question": "¿Cuánta lluvia cayó este mes?"
+}
+
+### VÍA: rotation question (run POST /rotations first, otherwise it says there is no batch)
+POST {{backendUrl}}/plots/{{plotId}}/via/ask
+Authorization: Bearer {{idToken}}
+Content-Type: application/json
+
+{
+  "question": "¿Qué rotación me recomiendas?"
+}
+
+### VÍA: recorded-economics question (needs a business/current document for the plot)
+POST {{backendUrl}}/plots/{{plotId}}/via/ask
+Authorization: Bearer {{idToken}}
+Content-Type: application/json
+
+{
+  "question": "¿Cuál es mi margen de ganancia?"
+}
+
+### VÍA: a question outside the supported intents -> intent "unknown", no figures, no invention
+POST {{backendUrl}}/plots/{{plotId}}/via/ask
+Authorization: Bearer {{idToken}}
+Content-Type: application/json
+
+{
+  "question": "¿Quién ganó el partido?"
+}
+
+### VÍA: empty question -> 400
+POST {{backendUrl}}/plots/{{plotId}}/via/ask
+Authorization: Bearer {{idToken}}
+Content-Type: application/json
+
+{
+  "question": "   "
+}
+
 ### Missing token -> 401
 GET {{backendUrl}}/plots/{{plotId}}/indicators
 
@@ -96,6 +144,20 @@ GET {{modeloUrl}}/api/v1/evaluar-parcela/ejemplo
 
 ### Narrow: climate aggregate for a window, independent of crop. Cached by (lat, lon, window).
 POST {{modeloUrl}}/api/v1/clima
+Content-Type: application/json
+
+{
+  "latitud": 24.4497,
+  "longitud": -104.1225,
+  "inicio": "2026-06-15",
+  "fin": "2026-10-28"
+}
+
+### Narrow: real per-day climate for a window. Returns only the days/parameters NASA POWER
+# actually had (a missing day is absent from `serie`, never filled with a made-up value).
+# The Backend's ModeloClimateProvider re-expands this into a dense calendar for the indicators
+# engine. Same cache TTL as /api/v1/clima but a separate cache entry per window.
+POST {{modeloUrl}}/api/v1/clima/diario
 Content-Type: application/json
 
 {

@@ -66,4 +66,22 @@ describe('computeScenarioPrices', () => {
     expect(result.floor).toBe(4500)
     expect(result.drop).toBe(4500)
   })
+
+  it('leaves every scenario null when no real price source is available', () => {
+    const result = computeScenarioPrices(
+      { ruralAvgPriceKg: null, wholesalePriceKg: null, guaranteedPriceTon: null, areaHa: 8 }, [],
+    )
+    expect(result).toEqual({ floor: null, average: null, optimistic: null, drop: null })
+  })
+
+  it('still uses the real history for floor and drop when only the yearly average is missing', () => {
+    const result = computeScenarioPrices(
+      { ruralAvgPriceKg: null, wholesalePriceKg: null, guaranteedPriceTon: null, areaHa: 8 },
+      [{ priceTon: 4000 }, { priceTon: 5000 }],
+    )
+    expect(result.average).toBeNull()
+    expect(result.optimistic).toBeNull()
+    expect(result.floor).toBe(4000)
+    expect(result.drop).toBe(4000)
+  })
 })

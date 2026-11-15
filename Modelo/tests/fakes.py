@@ -8,7 +8,7 @@ from typing import Any
 
 import requests
 
-from agrovia_api.clients.nasa_power import ClimateAggregate
+from agrovia_api.clients.nasa_power import ClimateAggregate, ClimateDailyPoint
 from agrovia_api.clients.ornl_modis import NDVISeries
 
 
@@ -44,6 +44,8 @@ class FakeClimateClient:
         self,
         aggregate: ClimateAggregate | None = None,
         error: Exception | None = None,
+        daily_series: list[ClimateDailyPoint] | None = None,
+        daily_error: Exception | None = None,
     ) -> None:
         self.aggregate = aggregate or ClimateAggregate(
             lluvia_ciclo_mm=480.0,
@@ -54,7 +56,13 @@ class FakeClimateClient:
             n_dias=120,
         )
         self.error = error
+        self.daily_series = daily_series if daily_series is not None else [
+            ClimateDailyPoint(fecha=date(2026, 6, 15), valores={"PRECTOTCORR": 2.0, "T2M": 20.0, "RH2M": 41.0}),
+            ClimateDailyPoint(fecha=date(2026, 6, 16), valores={"PRECTOTCORR": 0.0, "T2M": 21.0}),
+        ]
+        self.daily_error = daily_error
         self.calls: list[dict[str, Any]] = []
+        self.daily_calls: list[dict[str, Any]] = []
 
     def fetch_cycle(self, latitude, longitude, start: date, end: date):
         self.calls.append(
@@ -63,6 +71,14 @@ class FakeClimateClient:
         if self.error is not None:
             raise self.error
         return self.aggregate
+
+    def fetch_daily_series(self, latitude, longitude, start: date, end: date):
+        self.daily_calls.append(
+            {"latitude": latitude, "longitude": longitude, "start": start, "end": end}
+        )
+        if self.daily_error is not None:
+            raise self.daily_error
+        return self.daily_series
 
 
 class FakeNDVIClient:

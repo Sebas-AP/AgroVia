@@ -15,4 +15,20 @@ describe('computeSoilTemperatureAverages', () => {
   it('returns null for a window with no data', () => {
     expect(computeSoilTemperatureAverages([])).toEqual({ avg7d: null, avg10d: null })
   })
+
+  it('skips a missing day inside the window instead of treating it as zero', () => {
+    const days = [
+      { date: '2026-01-01', soilTempC: 10 },
+      { date: '2026-01-02', soilTempC: null },
+      { date: '2026-01-03', soilTempC: 20 },
+    ]
+    expect(computeSoilTemperatureAverages(days)).toEqual({ avg7d: 15, avg10d: 15 })
+  })
+
+  it('returns null for a window where every day is missing', () => {
+    const days = Array.from({ length: 3 }, (_, i) => ({
+      date: `2026-01-0${i + 1}`, soilTempC: null,
+    }))
+    expect(computeSoilTemperatureAverages(days)).toEqual({ avg7d: null, avg10d: null })
+  })
 })

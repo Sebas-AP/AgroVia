@@ -14,6 +14,11 @@ export interface PlotSnapshot {
   ownerUid: string
   name: string
   center: { lat: number; lon: number }
+  // Optional plot boundary as { lat, lon } vertices, closed (last repeats the first) or open.
+  // Validated by geo/polygon.ts: at least 3 distinct vertices, WGS84 ranges, non-zero area.
+  // When present and valid, providers/Modelo use its centroid instead of `center`, and its
+  // surface is compared against areaHa (reported as an infoGap, never overwritten).
+  polygon?: { lat: number; lon: number }[]
   areaHa: number
   mode: 'rainfed' | 'irrigated'
   currentCrop: string
@@ -84,6 +89,8 @@ export interface PlotIndicators {
   // has no climate/soil-moisture data at all, never a fabricated fallback (defect (f)).
   rainfallProvenance: Provenance | null
   moistureAnomalyProvenance: Provenance | null
+  // Same purpose for the NDVI figure: null when the window genuinely has no NDVI observation.
+  ndviProvenance: Provenance | null
   asOf: string
   engineVersion: string
 }

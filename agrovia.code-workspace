@@ -11,7 +11,8 @@
       "Dart-Code.dart-code",
       "dbaeumer.vscode-eslint",
       "esbenp.prettier-vscode",
-      "charliermarsh.ruff"
+      "charliermarsh.ruff",
+      "vscjava.vscode-gradle"
     ]
   }
 }
