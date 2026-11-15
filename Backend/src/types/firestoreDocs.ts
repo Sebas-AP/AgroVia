@@ -1,3 +1,5 @@
+import type { Provenance } from './provenance'
+
 export interface PlotPriorities {
   water: number
   income: number
@@ -29,6 +31,12 @@ export interface PlotSnapshot {
   origin: 'real' | 'demo'
   createdAt: string
   updatedAt: string
+  // Not yet collected from the farmer anywhere in this build — optional until a form field
+  // exists for them. Needed only by the Modelo integration mapper
+  // (integration/modeloMapper.ts), which throws a clear error rather than inventing a value
+  // when either is missing for a plot it's asked to map.
+  terrainType?: string
+  growthStage?: string
 }
 
 export interface StrategyScores {
@@ -38,6 +46,11 @@ export interface StrategyScores {
   pests: number
   economy: number
   market: number
+  // Omitted (not merely null) when the Modelo prediction service didn't respond for any crop in
+  // this sequence — the other scores stay valid either way (defect/criterion in INTEGRACION.md
+  // section 2). Object.values(scores) already skips an absent key, so totalScore's average is
+  // unaffected by its presence or absence.
+  modelSuccess?: number
 }
 
 export interface PlotIndicators {
@@ -66,6 +79,11 @@ export interface PlotIndicators {
   ndviDeviationVsYears: number | null
   bareSoil: boolean | null
   sources: string[]
+  // The specific provenance behind the two rotation-engine evidence figures that read from
+  // indicators (accumulated rainfall, moisture anomaly) — null only when that period genuinely
+  // has no climate/soil-moisture data at all, never a fabricated fallback (defect (f)).
+  rainfallProvenance: Provenance | null
+  moistureAnomalyProvenance: Provenance | null
   asOf: string
   engineVersion: string
 }

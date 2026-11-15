@@ -1,9 +1,14 @@
 # AppMovil — Agent Instructions
 
-Stack: Flutter/Dart. See the root `../AGENTS.md` for project-wide rules (language, protected assets, ethics) — they apply here too.
+Stack: Android (Kotlin, Gradle) — a native `WebView` wrapper around a React build exported from
+Figma Make. See the root `../AGENTS.md` for project-wide rules (language, protected assets, ethics)
+— they apply here too.
 
 ## This folder
 
-- This is a standalone Flutter project root: `flutter pub get`, `flutter run`, and opening it directly in Android Studio all work without extra configuration. Do not restructure it to work around that.
-- Lint: `flutter analyze`. Tests: `flutter test`.
-- Keep `pubspec.yaml` as the single source of dependencies; do not vendor packages manually.
+- The Gradle project root is `AppMovil/AgroViaApp/agrovia-figma-android-/`; open that folder
+  directly in Android Studio, not `AppMovil/` itself.
+- Build: `./gradlew :app:assembleDebug` from the Gradle project root. No test suite yet.
+- The `WebView` loads a prebuilt bundle from `app/src/main/assets/www/`. That bundle's source is
+  not in this repository — see root `INTEGRACION.md` §0. Never hand-edit the compiled/minified
+  JS/CSS under `assets/www/`.

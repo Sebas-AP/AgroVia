@@ -166,6 +166,8 @@ export function computeIndicators(input: ComputeIndicatorsInput): PlotIndicators
     ndviDeviationVsYears: null, // no multi-year baseline passed into this function yet
     bareSoil,
     sources: Array.from(new Set(sources)),
+    rainfallProvenance: climate.length > 0 ? climate[climate.length - 1].provenance : null,
+    moistureAnomalyProvenance: soilMoisture.length > 0 ? soilMoisture[soilMoisture.length - 1].provenance : null,
     asOf: monthClimate.length > 0 ? monthClimate[monthClimate.length - 1].date : `${month}-01`,
     engineVersion: ENGINE_VERSION,
   }

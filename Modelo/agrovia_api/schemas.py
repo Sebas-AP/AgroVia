@@ -37,6 +37,35 @@ class ParcelaInput(BaseModel):
     )
 
 
+class VentanaInput(BaseModel):
+    """Shared input for the narrow /clima and /ndvi routes: a coordinate and date window,
+    independent of any crop (see Modelo/agrovia_api/cache.py)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    latitud: float = Field(..., ge=-90.0, le=90.0)
+    longitud: float = Field(..., ge=-180.0, le=180.0)
+    inicio: date
+    fin: date
+
+
+class PrediccionInput(BaseModel):
+    """Input for POST /api/v1/predecir: the model's exact feature set (model_runner.FEATURES).
+    The caller (the Backend) is expected to have already resolved cultivo_id/modalidad (e.g. via
+    GET /api/v1/cultivos), not raw user-facing strings like 'maiz_grano'/'riego por goteo'."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cultivo_id: str = Field(..., min_length=1)
+    modalidad: str = Field(..., min_length=1)
+    cve_mun: int
+    lluvia_ciclo_mm: float
+    temp_media_c: float
+    temp_max_c: float
+    temp_min_extrema_c: float
+    radiacion_mj_m2: float
+
+
 class MunicipioDetectado(BaseModel):
     cve_mun: int
     municipio: str

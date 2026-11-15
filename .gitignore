@@ -5,9 +5,10 @@
 .env
 *.env.local
 
-# Flutter (AppMovil)
-AppMovil/build/
-AppMovil/.dart_tool/
+# Android (AppMovil)
+AppMovil/**/build/
+AppMovil/**/.gradle/
+AppMovil/**/local.properties
 
 # Node (Backend)
 Backend/node_modules/
@@ -23,6 +24,7 @@ Modelo/*.egg-info/
 .vscode/*.log
 
 # Firebase emulator
+firebase-debug.log
 firestore-debug.log
 ui-debug.log
 .firebase/

@@ -39,4 +39,31 @@ describe('computeScenarioPrices', () => {
     expect(under5ha.floor).toBe(4500)
     expect(over5ha.floor).not.toBe(4500)
   })
+
+  it('never returns a drop scenario below the floor, qualifying branch (guaranteed price above the crash percentile)', () => {
+    // guaranteedPriceTon (4500) sits above every point in this crashed-price history, so the
+    // unclamped 10th percentile would otherwise undercut the farmer's actual guarantee.
+    const result = computeScenarioPrices(
+      { ruralAvgPriceKg: 5, wholesalePriceKg: 6, guaranteedPriceTon: 4500, areaHa: 4 },
+      Array.from({ length: 12 }, (_, i) => ({ priceTon: 3000 + i * 10 })),
+    )
+    expect(result.floor).toBe(4500)
+    expect(result.drop).toBeGreaterThanOrEqual(result.floor as number)
+  })
+
+  it('never returns a drop scenario below the floor, non-qualifying branch (floor is history\'s own minimum)', () => {
+    const result = computeScenarioPrices(
+      { ruralAvgPriceKg: 5, wholesalePriceKg: 6, guaranteedPriceTon: 4500, areaHa: 6 },
+      Array.from({ length: 12 }, (_, i) => ({ priceTon: 3000 + i * 10 })),
+    )
+    expect(result.drop).toBeGreaterThanOrEqual(result.floor as number)
+  })
+
+  it('falls back to the guaranteed floor itself as drop when there is no price history at all', () => {
+    const result = computeScenarioPrices(
+      { ruralAvgPriceKg: 5, wholesalePriceKg: 6, guaranteedPriceTon: 4500, areaHa: 4 }, [],
+    )
+    expect(result.floor).toBe(4500)
+    expect(result.drop).toBe(4500)
+  })
 })

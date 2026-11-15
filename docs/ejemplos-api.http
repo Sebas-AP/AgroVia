@@ -1,0 +1,141 @@
+### AGROVÍA — example requests, Backend and Modelo
+# Works with the VS Code "REST Client" extension or IntelliJ/WebStorm's built-in HTTP client.
+# Backend: cd Backend && npm run build && node dist/server.js  (or npm run seed first, see below)
+# Modelo:  cd Modelo && uvicorn agrovia_api.main:app --reload
+#
+# Backend routes under /plots/:id/* need a Firebase ID token — see "Auth" below. The demo plot
+# below only exists after `npm run seed` (Backend/src/seed/runSeed.ts), owned by uid "demo-owner".
+
+@backendUrl = http://localhost:3000
+@modeloUrl = http://localhost:8000
+@plotId = demo-guadalupe-victoria
+@idToken = REPLACE_WITH_A_REAL_FIREBASE_ID_TOKEN_FOR_UID_demo-owner
+
+###############################################################################
+# Backend
+###############################################################################
+
+### Health check — no auth
+GET {{backendUrl}}/health
+
+### Crop catalog — no auth (not under /plots/:id)
+GET {{backendUrl}}/catalog/crops
+
+### Simulated price snapshot for a crop — no auth (not under /plots/:id)
+GET {{backendUrl}}/prices/corn
+
+### Current indicators for a plot — needs the owner's token
+GET {{backendUrl}}/plots/{{plotId}}/indicators
+Authorization: Bearer {{idToken}}
+
+### Generate and store rotation strategies for a plot
+POST {{backendUrl}}/plots/{{plotId}}/rotations
+Authorization: Bearer {{idToken}}
+Content-Type: application/json
+
+{}
+
+### Read back the latest generated strategies
+GET {{backendUrl}}/plots/{{plotId}}/rotations
+Authorization: Bearer {{idToken}}
+
+### Recompute economics with the farmer's real costs
+POST {{backendUrl}}/plots/{{plotId}}/economics
+Authorization: Bearer {{idToken}}
+Content-Type: application/json
+
+{
+  "crop": "corn",
+  "area": 9.6,
+  "seed": 480,
+  "fertilizer": 770,
+  "water": 190,
+  "labor": 960,
+  "machinery": 575,
+  "transport": 290,
+  "other": 95,
+  "yieldTonHa": 3.2,
+  "priceTon": 4200
+}
+
+### Missing token -> 401
+GET {{backendUrl}}/plots/{{plotId}}/indicators
+
+### Token for a different uid than the plot's ownerUid -> 403
+GET {{backendUrl}}/plots/{{plotId}}/indicators
+Authorization: Bearer REPLACE_WITH_A_TOKEN_FOR_ANY_OTHER_UID
+
+###############################################################################
+# Modelo
+###############################################################################
+
+### Health check
+GET {{modeloUrl}}/health
+
+### Composite evaluation: clima + NDVI + model + agronomic score, all in one call.
+# Repeating this once per candidate crop re-downloads NASA/ORNL for the same plot/window — use
+# the narrow routes below instead when evaluating several crops for the same plot.
+POST {{modeloUrl}}/api/v1/evaluar-parcela
+Content-Type: application/json
+
+{
+  "latitud": 24.4497,
+  "longitud": -104.1225,
+  "superficie_hectareas": 9.6,
+  "tipo_terreno": "plano",
+  "tipo_suelo": "franco",
+  "disponibilidad_agua": "limitada",
+  "sistema_riego": "temporal",
+  "cultivo_actual": "maiz_grano",
+  "fecha_siembra": "2026-06-15",
+  "etapa_crecimiento": "cosecha"
+}
+
+### Bundled example parcel (no body needed)
+GET {{modeloUrl}}/api/v1/evaluar-parcela/ejemplo
+
+### Narrow: climate aggregate for a window, independent of crop. Cached by (lat, lon, window).
+POST {{modeloUrl}}/api/v1/clima
+Content-Type: application/json
+
+{
+  "latitud": 24.4497,
+  "longitud": -104.1225,
+  "inicio": "2026-06-15",
+  "fin": "2026-10-28"
+}
+
+### Narrow: NDVI series for the same window. A real empty result (no composites) is 200 with
+# n_observaciones: 0, not an error; a 502 here means ORNL DAAC was unreachable and nothing was
+# cached for this window.
+POST {{modeloUrl}}/api/v1/ndvi
+Content-Type: application/json
+
+{
+  "latitud": 24.4497,
+  "longitud": -104.1225,
+  "inicio": "2026-06-15",
+  "fin": "2026-10-28"
+}
+
+### Narrow: run the model directly on an already-resolved feature set (e.g. from /clima +
+# /municipio below), once per candidate crop — no NASA/ORNL calls in this one.
+POST {{modeloUrl}}/api/v1/predecir
+Content-Type: application/json
+
+{
+  "cultivo_id": "maiz_grano",
+  "modalidad": "temporal",
+  "cve_mun": 8,
+  "lluvia_ciclo_mm": 480.0,
+  "temp_media_c": 20.5,
+  "temp_max_c": 27.0,
+  "temp_min_extrema_c": 8.0,
+  "radiacion_mj_m2": 20.0
+}
+
+### Narrow: detect the nearest municipality for a coordinate
+GET {{modeloUrl}}/api/v1/municipio?latitud=24.4497&longitud=-104.1225
+
+### Narrow: the full INIFAP crop catalogue
+GET {{modeloUrl}}/api/v1/cultivos

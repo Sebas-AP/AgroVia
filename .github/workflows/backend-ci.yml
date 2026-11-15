@@ -13,6 +13,21 @@ jobs:
         with:
           node-version: "20"
         if: hashFiles('Backend/package.json') != ''
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          # firebase-tools (for the Firestore/Auth emulators below) requires JDK 21+.
+          java-version: "21"
+        if: hashFiles('Backend/package.json') != ''
       - run: scripts/lint-folder.sh Backend package.json npm ci
-      - run: scripts/lint-folder.sh Backend package.json npx eslint .
-      - run: scripts/lint-folder.sh Backend package.json npx vitest run
+      # Scoped to src/tests (same as `npm run lint`), not `eslint .` — eslint.config.cjs itself
+      # is CommonJS (require/module.exports) and fails typescript-eslint's no-require-imports/
+      # no-undef rules if linted, which `eslint .` would do.
+      - run: scripts/lint-folder.sh Backend package.json npx eslint src tests
+      # Tests hit the Firestore/Auth emulators (local, no real project or credentials) rather
+      # than live Firebase. emulators:exec needs the repo-root firebase.json, so this step (unlike
+      # the ones above) can't go through lint-folder.sh's "cd Backend, then exec" shape; it
+      # reproduces the same skip-if-no-manifest behavior with the hashFiles condition instead.
+      - name: Test (Firestore + Auth emulators)
+        if: hashFiles('Backend/package.json') != ''
+        run: npx firebase-tools emulators:exec --only firestore,auth --project agrovia-ci "cd Backend && npx vitest run"

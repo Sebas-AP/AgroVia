@@ -41,6 +41,12 @@ HTTP_TIMEOUT_SECONDS = float(os.environ.get("AGROVIA_HTTP_TIMEOUT", "90"))
 # NDVI is supplementary, so it gets a short, separate timeout to fail fast.
 ORNL_TIMEOUT_SECONDS = float(os.environ.get("AGROVIA_ORNL_TIMEOUT", "20"))
 
+# Climate/NDVI are keyed by (lat, lon, window), independent of crop (see cache.py) -- 1 hour
+# default keeps a burst of per-crop evaluations for the same plot from re-hitting NASA/ORNL
+# without going stale against a full day's climate update cadence.
+CLIMATE_CACHE_TTL_SECONDS = float(os.environ.get("AGROVIA_CLIMATE_CACHE_TTL", "3600"))
+NDVI_CACHE_TTL_SECONDS = float(os.environ.get("AGROVIA_NDVI_CACHE_TTL", "3600"))
+
 # MODIS/VIIRS Land Products Web Service product and band used for greenness.
 ORNL_PRODUCT = "MOD13Q1"
 ORNL_NDVI_BAND = "250m_16_days_NDVI"

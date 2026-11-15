@@ -23,6 +23,10 @@ export function unauthorized(message: string): ApiError {
   return new ApiError(401, 'unauthorized', message)
 }
 
+export function forbidden(message: string): ApiError {
+  return new ApiError(403, 'forbidden', message)
+}
+
 export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction): void {
   if (err instanceof ApiError) {
     res.status(err.status).json({ error: { code: err.code, message: err.message, detail: err.detail } })

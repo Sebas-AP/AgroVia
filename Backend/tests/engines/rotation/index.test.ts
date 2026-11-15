@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { generateStrategies } from '../../../src/engines/rotation'
 import { demoRotationInput } from '../../fixtures/demoRotationInput'
 
@@ -61,5 +62,114 @@ describe('generateStrategies', () => {
     // pairs, not 2 — this plot should see current + 3 alternatives.
     const strategies = generateStrategies(demoRotationInput())
     expect(strategies.filter((s) => s.type === 'alternative').length).toBe(3)
+  })
+
+  it('caps the number of generated alternatives at maxAlternatives and records how many were discarded', () => {
+    // 20 mutually-compatible crops -> C(20,2) = 190 candidate pairs, far past the default cap.
+    const manyCrops = Array.from({ length: 20 }, (_, i) => ({
+      id: `crop-${i}`, name: `Crop ${i}`, cycleDays: 100, baseTempC: 10, optimalTempC: 20, maxTempC: 30,
+      waterRequiredMm: 300 + i * 10, fixesNitrogen: false, rootDepthCm: 50,
+      organicMatterContribution: 'medium' as const, pestRisk: [],
+      plantingWindow: { start: '06-01', end: '07-01' }, droughtTolerance: 'medium' as const,
+      source: 'test', reference: 'test', criterionType: 'assumed' as const,
+    }))
+    const input = demoRotationInput({ seasons: [] })
+    const strategies = generateStrategies({ ...input, catalog: manyCrops })
+    const alternatives = strategies.filter((s) => s.type === 'alternative')
+    expect(alternatives.length).toBe(5) // default maxAlternatives
+    expect(strategies.flatMap((s) => s.infoGaps).join(' ')).toMatch(/185 additional alternative/)
+  })
+
+  it('caps at an explicitly configured maxAlternatives too, not just the default', () => {
+    const manyCrops = Array.from({ length: 6 }, (_, i) => ({
+      id: `crop-${i}`, name: `Crop ${i}`, cycleDays: 100, baseTempC: 10, optimalTempC: 20, maxTempC: 30,
+      waterRequiredMm: 300 + i * 10, fixesNitrogen: false, rootDepthCm: 50,
+      organicMatterContribution: 'medium' as const, pestRisk: [],
+      plantingWindow: { start: '06-01', end: '07-01' }, droughtTolerance: 'medium' as const,
+      source: 'test', reference: 'test', criterionType: 'assumed' as const,
+    }))
+    const input = demoRotationInput({ seasons: [] })
+    const strategies = generateStrategies({ ...input, catalog: manyCrops, maxAlternatives: 4 })
+    const alternatives = strategies.filter((s) => s.type === 'alternative')
+    expect(alternatives.length).toBe(4)
+    expect(strategies.flatMap((s) => s.infoGaps).join(' ')).toMatch(/11 additional alternative/)
+  })
+
+  it('derives catalogVersion from the catalog actually passed in, not a constant', () => {
+    const withOneCatalog = generateStrategies(demoRotationInput())
+    const differentCatalog = generateStrategies({
+      ...demoRotationInput(), catalog: [{
+        id: 'only-crop', name: 'Only crop', cycleDays: 1, baseTempC: 1, optimalTempC: 1, maxTempC: 1,
+        waterRequiredMm: 1, fixesNitrogen: false, rootDepthCm: 1, organicMatterContribution: 'low',
+        pestRisk: [], plantingWindow: { start: '01-01', end: '01-02' }, droughtTolerance: 'low',
+        source: 'test', reference: 'test', criterionType: 'assumed',
+      }],
+    })
+    expect(withOneCatalog[0].catalogVersion).not.toBe(differentCatalog[0].catalogVersion)
+  })
+
+  it('stamps engineVersion from package.json rather than a hardcoded literal', () => {
+    const pkg = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf-8')) as { version: string }
+    const strategies = generateStrategies(demoRotationInput())
+    expect(strategies[0].engineVersion).toBe(pkg.version)
+  })
+
+  it("names a benefit for drought tolerance only when the plot's water availability is actually low", () => {
+    const lowWater = generateStrategies(demoRotationInput())
+    const alt = lowWater.find((s) => s.type === 'alternative' && s.sequence.some((c) => c.crop === 'forage-sorghum'))!
+    expect(alt.benefits.join(' ')).toMatch(/drought-tolerant/)
+
+    const highWater = generateStrategies({
+      ...demoRotationInput(),
+      // maxAlternatives high enough that none of the (now larger, corn-included) candidate pool
+      // gets discarded by the score cap — this test is about the water-availability condition,
+      // not about capping.
+      maxAlternatives: 10,
+      plot: { ...demoRotationInput().plot, constraints: { waterAvailability: 'high', equipment: [] } },
+    })
+    const altHighWater = highWater.find((s) => s.type === 'alternative' && s.sequence.some((c) => c.crop === 'forage-sorghum'))!
+    expect(altHighWater.benefits.join(' ')).not.toMatch(/drought-tolerant/)
+  })
+
+  it('adds a modelSuccess score and a modelo-agrovia evidence entry when model predictions are supplied', () => {
+    const input = demoRotationInput()
+    const strategies = generateStrategies({
+      ...input,
+      modelSuccessByCrop: { corn: 0.8, beans: 0.6, 'forage-oats': 0.5, 'forage-sorghum': 0.5 },
+      modelInfo: { name: 'modelo-agrovia', version: 'modelo_agrovia.joblib' },
+    })
+    for (const strategy of strategies) {
+      expect(strategy.scores.modelSuccess).toBeGreaterThan(0)
+      const evidence = strategy.evidence.find((e) => e.provenance.source === 'modelo-agrovia')
+      expect(evidence).toBeDefined()
+      expect(evidence!.provenance.version).toBe('modelo_agrovia.joblib')
+    }
+  })
+
+  it('keeps generating every strategy, with modelSuccess omitted and the gap recorded, when Modelo is down', () => {
+    const input = demoRotationInput()
+    const strategies = generateStrategies({
+      ...input,
+      modelUnavailableReason: 'Modelo did not respond: ECONNREFUSED',
+    })
+    expect(strategies.length).toBeGreaterThanOrEqual(3)
+    for (const strategy of strategies) {
+      expect(strategy.scores.modelSuccess).toBeUndefined()
+      expect(strategy.evidence.some((e) => e.provenance.source === 'modelo-agrovia')).toBe(false)
+      expect(strategy.infoGaps.join(' ')).toMatch(/modelSuccess criterion omitted.*ECONNREFUSED/)
+    }
+  })
+
+  it('records an infoGap instead of fabricating evidence when a period has no climate/soil-moisture provenance', () => {
+    const input = demoRotationInput()
+    const strategies = generateStrategies({
+      ...input,
+      indicators: { ...input.indicators, rainfallProvenance: null, moistureAnomalyProvenance: null },
+    })
+    const current = strategies.find((s) => s.type === 'current')!
+    expect(current.evidence.some((e) => e.label === 'Accumulated rainfall')).toBe(false)
+    expect(current.evidence.some((e) => e.label === 'Root-zone moisture anomaly')).toBe(false)
+    expect(current.infoGaps.join(' ')).toMatch(/no climate source provenance/i)
+    expect(current.infoGaps.join(' ')).toMatch(/no soil-moisture source provenance/i)
   })
 })

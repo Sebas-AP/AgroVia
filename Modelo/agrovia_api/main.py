@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, TypeVar
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from . import __version__
@@ -15,7 +16,17 @@ from .clients.nasa_power import NasaPowerError
 from .clients.ornl_modis import OrnlMODISError
 from .config import DEFAULT_PARCEL_EXAMPLE
 from .errors import EvaluationError
-from .schemas import ParcelaInput, RespuestaEvaluacion
+from .schemas import (
+    NDVIMODIS,
+    ClimaNASA,
+    CultivoInfo,
+    EvaluacionModelo,
+    MunicipioDetectado,
+    ParcelaInput,
+    PrediccionInput,
+    RespuestaEvaluacion,
+    VentanaInput,
+)
 from .service import AgroViaService, build_default_service
 
 app = FastAPI(
@@ -41,9 +52,12 @@ def load_parcela_from_file(path: Path) -> ParcelaInput:
     return ParcelaInput.model_validate(payload)
 
 
-def _evaluate(service: AgroViaService, parcela: ParcelaInput) -> RespuestaEvaluacion:
+T = TypeVar("T")
+
+
+def _run_with_upstream_errors(action: Callable[[], T]) -> T:
     try:
-        return service.evaluate(parcela)
+        return action()
     except EvaluationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except NasaPowerError as exc:
@@ -56,6 +70,10 @@ def _evaluate(service: AgroViaService, parcela: ParcelaInput) -> RespuestaEvalua
             status_code=502,
             detail=f"Upstream ORNL DAAC error: {exc}",
         ) from exc
+
+
+def _evaluate(service: AgroViaService, parcela: ParcelaInput) -> RespuestaEvaluacion:
+    return _run_with_upstream_errors(lambda: service.evaluate(parcela))
 
 
 @app.get("/health")
@@ -84,6 +102,54 @@ def evaluar_parcela_ejemplo(
         )
     parcela = load_parcela_from_file(DEFAULT_PARCEL_EXAMPLE)
     return _evaluate(service, parcela)
+
+
+@app.post("/api/v1/clima", response_model=ClimaNASA)
+def clima(
+    ventana: VentanaInput,
+    service: Annotated[AgroViaService, Depends(get_service)],
+) -> ClimaNASA:
+    """Narrow, crop-independent NASA POWER lookup — see Modelo/agrovia_api/cache.py."""
+    return _run_with_upstream_errors(
+        lambda: service.fetch_climate_window(ventana.latitud, ventana.longitud, ventana.inicio, ventana.fin)
+    )
+
+
+@app.post("/api/v1/ndvi", response_model=NDVIMODIS)
+def ndvi(
+    ventana: VentanaInput,
+    service: Annotated[AgroViaService, Depends(get_service)],
+) -> NDVIMODIS:
+    """Narrow, crop-independent ORNL DAAC MODIS NDVI lookup."""
+    return _run_with_upstream_errors(
+        lambda: service.fetch_ndvi_window(ventana.latitud, ventana.longitud, ventana.inicio, ventana.fin)
+    )
+
+
+@app.post("/api/v1/predecir", response_model=EvaluacionModelo)
+def predecir(
+    payload: PrediccionInput,
+    service: Annotated[AgroViaService, Depends(get_service)],
+) -> EvaluacionModelo:
+    """Runs the trained model directly on an already-resolved feature set."""
+    return service.predict_from_features(payload)
+
+
+@app.get("/api/v1/municipio", response_model=MunicipioDetectado)
+def municipio(
+    service: Annotated[AgroViaService, Depends(get_service)],
+    latitud: Annotated[float, Query(ge=-90.0, le=90.0)],
+    longitud: Annotated[float, Query(ge=-180.0, le=180.0)],
+) -> MunicipioDetectado:
+    return service.detect_municipality(latitud, longitud)
+
+
+@app.get("/api/v1/cultivos", response_model=list[CultivoInfo])
+def cultivos(
+    service: Annotated[AgroViaService, Depends(get_service)],
+) -> list[CultivoInfo]:
+    """The full INIFAP crop catalogue (datasets/cultivos_inifap.json)."""
+    return service.list_crops()
 
 
 @app.exception_handler(FileNotFoundError)

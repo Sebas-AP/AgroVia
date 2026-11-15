@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 import type {
   PlotSnapshot, PlotPriorities, PlotIndicators, CropCatalogEntry,
 } from '../../types/firestoreDocs'
@@ -6,8 +10,20 @@ import type { StaticSoilProfile } from '../../providers/SoilProvider'
 import { filterCompatibleCrops } from './filters'
 import { combineScores } from './scoring'
 
-const ENGINE_VERSION = '1.0.0'
-const CATALOG_VERSION = '1.0.0'
+const packageJsonPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../../package.json')
+const ENGINE_VERSION = (JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as { version: string }).version
+
+// A fingerprint of the exact catalog array used for this call, not a constant — so two calls
+// against different catalog content never claim the same catalogVersion (defect (h)).
+function computeCatalogVersion(catalog: CropCatalogEntry[]): string {
+  const fingerprint = [...catalog]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((c) => `${c.id}:${c.criterionType}:${c.source}:${c.waterRequiredMm}:${c.droughtTolerance}`)
+    .join('|')
+  return createHash('sha1').update(fingerprint).digest('hex').slice(0, 12)
+}
+
+const DEFAULT_MAX_ALTERNATIVES = 5
 
 export interface GenerateStrategiesInput {
   plot: PlotSnapshot
@@ -16,6 +32,18 @@ export interface GenerateStrategiesInput {
   priorities: PlotPriorities
   indicators: PlotIndicators
   catalog: CropCatalogEntry[]
+  // Caps the O(n^2) pairwise alternatives generated from the compatible-crop list, keeping the
+  // best `maxAlternatives` by totalScore (defect (e)). Default 5.
+  maxAlternatives?: number
+  // Modelo-predicted harvest-success probability per Backend crop id (routes/plots.ts resolves
+  // this over HTTP before calling generateStrategies — this module stays a pure, synchronous
+  // function). Absent entirely when Modelo wasn't reachable; per-crop entries are only present
+  // for crops the model actually answered for.
+  modelSuccessByCrop?: Record<string, number>
+  modelInfo?: { name: string; version: string }
+  // Set when Modelo was reachable in general but produced no usable modelSuccessByCrop at all —
+  // recorded in every strategy's infoGaps rather than silently dropping the criterion.
+  modelUnavailableReason?: string
 }
 
 function lookupCrops(
@@ -35,7 +63,10 @@ function lookupCrops(
   return found
 }
 
-function buildBenefits(crops: CropCatalogEntry[]): string[] {
+function buildBenefits(
+  crops: CropCatalogEntry[],
+  waterAvailability: PlotSnapshot['constraints']['waterAvailability'],
+): string[] {
   const benefits: string[] = []
   if (crops.some((c) => c.fixesNitrogen)) {
     benefits.push('Includes a nitrogen-fixing crop, reducing the fertilizer this rotation needs.')
@@ -43,7 +74,9 @@ function buildBenefits(crops: CropCatalogEntry[]): string[] {
   if (crops.some((c) => c.organicMatterContribution === 'high')) {
     benefits.push('Includes a crop with a high organic-matter contribution, improving soil structure over time.')
   }
-  if (crops.some((c) => c.droughtTolerance === 'high')) {
+  // Only claimed when the plot's own declared water availability is actually low — a
+  // drought-tolerant crop isn't a benefit worth naming on a plot with plenty of water (defect (g)).
+  if (waterAvailability === 'low' && crops.some((c) => c.droughtTolerance === 'high')) {
     benefits.push('Includes a drought-tolerant crop, a good match for this plot\'s low declared water availability.')
   }
   return benefits
@@ -65,26 +98,38 @@ function buildRisks(crops: CropCatalogEntry[], indicators: PlotIndicators): stri
   return risks
 }
 
-function buildIndicatorEvidence(indicators: PlotIndicators): RotationStrategy['evidence'] {
-  const asOf = indicators.asOf
-  const provenanceFor = (label: string): RotationStrategy['evidence'][number] => ({
-    label,
-    value: '', // filled below per field
-    unit: '',
-    period: asOf,
-    provenance: {
-      source: indicators.sources[0] ?? 'indicators engine', product: 'monthly indicators',
-      version: indicators.engineVersion, asOf, latencyDays: 0, kind: 'estimated', origin: 'simulated',
-    },
-  })
-  return [
-    { ...provenanceFor('Accumulated rainfall'), value: String(indicators.rainAccumMm), unit: 'mm' },
-    {
-      ...provenanceFor('Root-zone moisture anomaly'),
-      value: indicators.moistureAnomalyPctl === null ? 'unknown' : String(indicators.moistureAnomalyPctl),
-      unit: 'percentile',
-    },
-  ]
+// Provenance comes from the real climate/soil-moisture sources the indicators engine actually
+// used (indicators.rainfallProvenance / .moistureAnomalyProvenance), not a fixed
+// 'estimated'/'simulated' constant — so it reads 'real' once real providers are wired in, and
+// stays honest (an infoGap, not a fabricated origin) when a period genuinely has no data (defect (f)).
+function buildIndicatorEvidence(indicators: PlotIndicators, infoGaps: string[]): RotationStrategy['evidence'] {
+  const evidence: RotationStrategy['evidence'] = []
+
+  if (indicators.rainfallProvenance) {
+    evidence.push({
+      label: 'Accumulated rainfall', value: String(indicators.rainAccumMm), unit: 'mm',
+      period: indicators.asOf, provenance: indicators.rainfallProvenance,
+    })
+  } else {
+    infoGaps.push('No climate source provenance available for the accumulated-rainfall figure.')
+  }
+
+  if (indicators.moistureAnomalyProvenance && indicators.moistureAnomalyPctl !== null) {
+    evidence.push({
+      label: 'Root-zone moisture anomaly', value: String(indicators.moistureAnomalyPctl), unit: 'percentile',
+      period: indicators.asOf, provenance: indicators.moistureAnomalyProvenance,
+    })
+  } else {
+    infoGaps.push('No soil-moisture source provenance available for the moisture-anomaly figure.')
+  }
+
+  return evidence
+}
+
+interface ModelContext {
+  successByCrop?: Record<string, number>
+  info?: { name: string; version: string }
+  unavailableReason?: string
 }
 
 function buildStrategy(
@@ -97,12 +142,31 @@ function buildStrategy(
   staticProfile: StaticSoilProfile,
   indicators: PlotIndicators,
   priorities: PlotPriorities,
+  waterAvailability: PlotSnapshot['constraints']['waterAvailability'],
+  model: ModelContext,
 ): RotationStrategy {
   const crops = lookupCrops(sequence.map((s) => s.crop), catalog, infoGaps)
   if (crops.length === 0) {
     infoGaps.push('No crop in this sequence matched the catalog — the water/soil scores below are not meaningful (shown as 0).')
   }
-  const { scores, totalScore } = combineScores(crops, sequence, staticProfile, indicators, priorities)
+  const { scores, totalScore } = combineScores(
+    crops, sequence, staticProfile, indicators, priorities, model.successByCrop,
+  )
+  const evidence = buildIndicatorEvidence(indicators, infoGaps)
+  if (scores.modelSuccess !== undefined && model.info) {
+    evidence.push({
+      label: 'Modelo-predicted harvest-success probability',
+      value: String(Math.round(scores.modelSuccess) / 100),
+      unit: 'probability',
+      period: indicators.asOf,
+      provenance: {
+        source: 'modelo-agrovia', product: model.info.name, version: model.info.version,
+        asOf: indicators.asOf, latencyDays: 0, kind: 'estimated', origin: 'real',
+      },
+    })
+  } else if (model.unavailableReason) {
+    infoGaps.push(`modelSuccess criterion omitted: ${model.unavailableReason}`)
+  }
   const sequenceText = sequence.map((s) => `${s.crop} (${s.year})`).join(' -> ')
 
   return {
@@ -110,11 +174,11 @@ function buildStrategy(
     type,
     sequence,
     rationale,
-    evidence: buildIndicatorEvidence(indicators),
-    benefits: buildBenefits(crops),
+    evidence,
+    benefits: buildBenefits(crops, waterAvailability),
     // Price-based evidence/economics are filled by the rotations route (Task 10), which also has
     // the economics engine (Task 9) and the farmer's real business inputs — neither is available
-    // at this layer. summary.avgMargin is likewise filled there once economics exist.
+    // at this layer. summary.avgMarginPct/avgProfitMxn are likewise filled there once economics exist.
     economics: [],
     infoGaps,
     risks: buildRisks(crops, indicators),
@@ -123,11 +187,20 @@ function buildStrategy(
     summary: {
       sequenceText,
       shortRationale: rationale.slice(0, 120),
-      avgMargin: 0,
+      avgMarginPct: null,
+      avgProfitMxn: null,
     },
     engineVersion: ENGINE_VERSION,
-    catalogVersion: CATALOG_VERSION,
+    catalogVersion: computeCatalogVersion(catalog),
     generatedAt: new Date().toISOString(),
+  }
+}
+
+function modelContextFrom(input: GenerateStrategiesInput): ModelContext {
+  return {
+    successByCrop: input.modelSuccessByCrop,
+    info: input.modelInfo,
+    unavailableReason: input.modelSuccessByCrop === undefined ? input.modelUnavailableReason : undefined,
   }
 }
 
@@ -145,6 +218,7 @@ function buildCurrentStrategy(input: GenerateStrategiesInput): RotationStrategy 
     'current', 'current', sequence,
     'Reconstructed from this plot\'s recorded season history.',
     infoGaps, input.catalog, input.staticProfile, input.indicators, input.priorities,
+    input.plot.constraints.waterAvailability, modelContextFrom(input),
   )
 }
 
@@ -157,11 +231,12 @@ function buildAlternativeStrategies(input: GenerateStrategiesInput): RotationStr
     .sort((a, b) => a.waterRequiredMm - b.waterRequiredMm)
 
   const startYear = nextYearAfter(input.seasons)
-  const alternatives: RotationStrategy[] = []
+  const candidates: RotationStrategy[] = []
 
   // Every distinct pair of compatible crops, not just adjacent ones in the water-sorted list —
   // with only 2-3 candidates typical for this plot, adjacent-only pairing left the alternative
-  // pool too thin (and made sequence collisions structurally impossible to exercise).
+  // pool too thin (and made sequence collisions structurally impossible to exercise). This is
+  // O(n^2) in the compatible-crop count, so the candidate pool is capped below (defect (e)).
   let isFirstPair = true
   for (let i = 0; i < compatible.length - 1; i++) {
     for (let j = i + 1; j < compatible.length; j++) {
@@ -172,15 +247,26 @@ function buildAlternativeStrategies(input: GenerateStrategiesInput): RotationStr
       ]
       const id = isFirstPair ? 'alt-low-water' : `alt-${cropA.id}-${cropB.id}`
       isFirstPair = false
-      alternatives.push(buildStrategy(
+      candidates.push(buildStrategy(
         id, 'alternative', sequence,
         `Alternates ${cropA.name} and ${cropB.name}, both compatible with this plot's declared water availability.`,
         [], input.catalog, input.staticProfile, input.indicators, input.priorities,
+        input.plot.constraints.waterAvailability, modelContextFrom(input),
       ))
     }
   }
 
-  return alternatives
+  const maxAlternatives = input.maxAlternatives ?? DEFAULT_MAX_ALTERNATIVES
+  const kept = [...candidates].sort((a, b) => b.totalScore - a.totalScore).slice(0, maxAlternatives)
+  const discarded = candidates.length - kept.length
+  if (discarded > 0) {
+    kept[0]?.infoGaps.push(
+      `${discarded} additional alternative(s) were generated from the compatible-crop catalog but ` +
+      `discarded to keep only the top ${maxAlternatives} by score.`,
+    )
+  }
+
+  return kept
 }
 
 export function generateStrategies(input: GenerateStrategiesInput): RotationStrategy[] {

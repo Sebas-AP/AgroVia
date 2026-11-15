@@ -3,25 +3,42 @@ import { getAdminFirestore } from '../firestore/admin'
 import { COLLECTIONS } from '../firestore/collections'
 import { computeCellId } from '../firestore/cellId'
 import { notFound, badRequest } from '../middleware/errorHandler'
+import { plotOwnerAuth } from '../middleware/plotOwnerAuth'
 import { computeIndicators } from '../engines/indicators'
 import { generateStrategies } from '../engines/rotation'
 import { computeEconomicResult, computeScenarioPrices } from '../engines/economics'
 import { SimulatedClimateProvider } from '../providers/ClimateProvider'
 import { SimulatedSoilMoistureProvider } from '../providers/SoilMoistureProvider'
-import { SimulatedNdviProvider } from '../providers/NdviProvider'
+import { SimulatedNdviProvider, ModeloNdviProvider, type NdviProvider } from '../providers/NdviProvider'
 import { SimulatedSoilProvider } from '../providers/SoilProvider'
-import { SimulatedPricesProvider } from '../providers/PricesProvider'
+import { SimulatedPricesProvider, type PricesProvider } from '../providers/PricesProvider'
+import { ModeloClient } from '../integration/modeloClient'
+import { toModeloCropId } from '../integration/modeloCropIds'
+import type { GenerateStrategiesInput } from '../engines/rotation'
 import type { PlotSnapshot, CropCatalogEntry } from '../types/firestoreDocs'
 import type { BusinessInputs } from '../types/business'
 import type { RotationStrategy } from '../types/strategy'
 
 export const plotsRouter = Router()
 
+plotsRouter.use('/plots/:id', plotOwnerAuth)
+
 const climateProvider = new SimulatedClimateProvider()
 const soilMoistureProvider = new SimulatedSoilMoistureProvider()
-const ndviProvider = new SimulatedNdviProvider()
 const soilProvider = new SimulatedSoilProvider()
 const pricesProvider = new SimulatedPricesProvider()
+
+// USE_SIMULATED_PROVIDERS=false switches NDVI to the real Modelo-backed provider once
+// MODELO_BASE_URL is set. Climate and crop-criteria stay simulated regardless — see
+// INTEGRACION.md for the documented contract gaps (Modelo's /clima is a window aggregate, not
+// a daily series the indicators engine could use without fabricating values; its INIFAP
+// catalogue doesn't carry the rotation-scoring fields cropCatalog needs). Never silently
+// decided here: this file just reflects what's actually implemented.
+const useSimulatedProviders = process.env.USE_SIMULATED_PROVIDERS !== 'false'
+const modeloClient = (!useSimulatedProviders && process.env.MODELO_BASE_URL)
+  ? new ModeloClient({ baseUrl: process.env.MODELO_BASE_URL })
+  : null
+const ndviProvider: NdviProvider = modeloClient ? new ModeloNdviProvider(modeloClient) : new SimulatedNdviProvider()
 
 async function getPlotOrThrow(id: string): Promise<PlotSnapshot> {
   const doc = await getAdminFirestore().collection(COLLECTIONS.plots).doc(id).get()
@@ -115,13 +132,100 @@ function hasNullRatio(result: { costPerTon: number | null; marginPct: number | n
 }
 
 async function fetchPriceHistory(crop: string, municipality: string, months: number): Promise<{ priceTon: number }[]> {
-  const points: { priceTon: number }[] = []
-  for (let i = 0; i < months; i++) {
-    const date = daysAgo(i * 30)
-    const snapshot = await pricesProvider.getSnapshot(crop, municipality, date)
-    points.push({ priceTon: snapshot.ruralAvgPriceKg * 1000 })
+  const dates = Array.from({ length: months }, (_, i) => daysAgo(i * 30))
+  const snapshots = await Promise.all(dates.map((date) => pricesProvider.getSnapshot(crop, municipality, date)))
+  return snapshots.map((snapshot) => ({ priceTon: snapshot.ruralAvgPriceKg * 1000 }))
+}
+
+function primaryCropOf(strategy: RotationStrategy, plot: PlotSnapshot): string {
+  // Strategy A's sequence is sorted by historical year, so its first entry is the OLDEST
+  // season, not the plot's current crop — price it by plot.currentCrop instead.
+  return (strategy.type === 'current' ? plot.currentCrop : strategy.sequence[0]?.crop) ?? plot.currentCrop
+}
+
+interface CropPriceData {
+  priceSnapshot: Awaited<ReturnType<PricesProvider['getSnapshot']>>
+  priceHistory: { priceTon: number }[]
+}
+
+// Fetched once per distinct crop across the whole batch of strategies, not once per strategy —
+// with 7 strategies that used to mean 90+ serial calls for what's really at most a handful of
+// distinct crops (defect (d)).
+async function fetchPriceDataByCrop(
+  crops: string[], municipality: string, asOfDate: string,
+): Promise<Map<string, CropPriceData>> {
+  const distinctCrops = [...new Set(crops)]
+  const entries = await Promise.all(distinctCrops.map(async (crop): Promise<[string, CropPriceData]> => {
+    const [priceSnapshot, priceHistory] = await Promise.all([
+      pricesProvider.getSnapshot(crop, municipality, asOfDate),
+      fetchPriceHistory(crop, municipality, 12),
+    ])
+    return [crop, { priceSnapshot, priceHistory }]
+  }))
+  return new Map(entries)
+}
+
+interface ModelSuccessResult {
+  byCrop: Record<string, number>
+  info?: { name: string; version: string }
+  unavailableReason?: string
+}
+
+// Modelo's prediction is trained to evaluate a crop against a window of real NASA POWER
+// climate, not to forecast an unplanted future rotation — there's no real sowing date or
+// cycle-specific window for an "alternative" strategy. ASSUMPTION: the last 30 days' aggregate
+// (the same real window the indicators engine already fetched climate for) stands in as
+// "current regional conditions" for every candidate crop, documented here for review rather
+// than silently treated as a true per-cycle forecast.
+async function fetchModelSuccessByCrop(
+  plot: PlotSnapshot, catalog: CropCatalogEntry[], client: ModeloClient,
+): Promise<ModelSuccessResult> {
+  const to = daysAgo(0)
+  const from = daysAgo(30)
+  let clima
+  let municipio
+  try {
+    [clima, municipio] = await Promise.all([
+      client.clima({ latitud: plot.center.lat, longitud: plot.center.lon, inicio: from, fin: to }),
+      client.municipio(plot.center.lat, plot.center.lon),
+    ])
+  } catch (err) {
+    return { byCrop: {}, unavailableReason: `Modelo did not respond: ${String(err)}` }
   }
-  return points
+
+  const modalidad = plot.mode === 'irrigated' ? 'riego' : 'temporal'
+  const predictions = await Promise.all(catalog.map(async (crop) => {
+    const modeloCropId = toModeloCropId(crop.id)
+    if (!modeloCropId) {
+      return null
+    }
+    try {
+      const result = await client.predecir({
+        cultivo_id: modeloCropId, modalidad, cve_mun: municipio.cve_mun,
+        lluvia_ciclo_mm: clima.lluvia_ciclo_mm, temp_media_c: clima.temp_media_c,
+        temp_max_c: clima.temp_max_c, temp_min_extrema_c: clima.temp_min_extrema_c,
+        radiacion_mj_m2: clima.radiacion_mj_m2,
+      })
+      return { backendCropId: crop.id, result }
+    } catch {
+      return null
+    }
+  }))
+
+  const byCrop: Record<string, number> = {}
+  let info: ModelSuccessResult['info']
+  for (const prediction of predictions) {
+    if (prediction) {
+      byCrop[prediction.backendCropId] = prediction.result.probabilidad_exito
+      // EvaluacionModelo has no separate semantic-version field; the joblib filename it does
+      // return is the only per-prediction identifier Modelo actually provides.
+      info = { name: 'modelo-agrovia', version: prediction.result.modelo }
+    }
+  }
+  if (Object.keys(byCrop).length === 0) {
+    return { byCrop, unavailableReason: 'Modelo returned no usable prediction for any crop in the catalog.' }
+  }
+  return { byCrop, info }
 }
 
 plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
@@ -139,9 +243,16 @@ plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
     const staticProfile = await soilProvider.getStaticProfile(plot.center.lat, plot.center.lon)
     const indicators = await computeCurrentIndicators(plot, catalog)
 
+    const modelSuccess: ModelSuccessResult = modeloClient
+      ? await fetchModelSuccessByCrop(plot, catalog, modeloClient)
+      : { byCrop: {} }
+
     const strategies = generateStrategies({
       plot, staticProfile, seasons, priorities: plot.priorities, indicators, catalog,
-    })
+      modelSuccessByCrop: Object.keys(modelSuccess.byCrop).length > 0 ? modelSuccess.byCrop : undefined,
+      modelInfo: modelSuccess.info,
+      modelUnavailableReason: modelSuccess.unavailableReason,
+    } satisfies GenerateStrategiesInput)
 
     let business: BusinessInputs | null = null
     if (businessSnapshot.exists) {
@@ -152,25 +263,23 @@ plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
     }
 
     const asOfDate = daysAgo(0)
+    // 12 points so the 10th-percentile "drop" scenario doesn't collapse to the same index (0)
+    // as the plain minimum "floor" uses when the plot is too large for the guaranteed-price
+    // floor — floor(0.1 * (n-1)) only moves off index 0 once n >= 11.
+    const priceDataByCrop = await fetchPriceDataByCrop(
+      strategies.map((s) => primaryCropOf(s, plot)), plot.municipality, asOfDate,
+    )
 
     for (const strategy of strategies) {
-      // Strategy A's sequence is sorted by historical year, so its first entry is the OLDEST
-      // season, not the plot's current crop — price it by plot.currentCrop instead.
-      const primaryCrop = strategy.type === 'current' ? plot.currentCrop : strategy.sequence[0]?.crop
+      const primaryCrop = primaryCropOf(strategy, plot)
       const catalogEntry = catalog.find((c) => c.id === primaryCrop)
+      const { priceSnapshot, priceHistory } = priceDataByCrop.get(primaryCrop)!
 
-      const priceSnapshot = await pricesProvider.getSnapshot(
-        primaryCrop ?? plot.currentCrop, plot.municipality, asOfDate,
-      )
       strategy.evidence.push({
         label: 'Rural average price', value: String(priceSnapshot.ruralAvgPriceKg), unit: 'MXN/kg',
         period: asOfDate, provenance: priceSnapshot.provenance,
       })
 
-      // 12 points so the 10th-percentile "drop" scenario doesn't collapse to the same index (0)
-      // as the plain minimum "floor" uses when the plot is too large for the guaranteed-price
-      // floor — floor(0.1 * (n-1)) only moves off index 0 once n >= 11.
-      const priceHistory = await fetchPriceHistory(primaryCrop ?? plot.currentCrop, plot.municipality, 12)
       const scenarioPrices = computeScenarioPrices({ ...priceSnapshot, areaHa: plot.areaHa }, priceHistory)
 
       // The farmer's one business/current record is for a single crop — only apply it to the
@@ -190,7 +299,7 @@ plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
           )
         }
         baseInputs = defaultBusinessInputs(
-          primaryCrop ?? plot.currentCrop, plot.areaHa, catalogEntry ? priceSnapshot.yieldTonHa : 0,
+          primaryCrop, plot.areaHa, catalogEntry ? priceSnapshot.yieldTonHa : 0,
         )
       }
 
@@ -208,9 +317,10 @@ plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
 
       const averageScenario = strategy.economics.find((e) => e.scenario === 'average')
       if (averageScenario && averageScenario.result.marginPct !== null) {
-        strategy.summary.avgMargin = averageScenario.result.marginPct
+        strategy.summary.avgMarginPct = averageScenario.result.marginPct
+        strategy.summary.avgProfitMxn = averageScenario.result.profit
       } else {
-        strategy.infoGaps.push('Average-scenario margin is undefined — the card summary shows 0 as a placeholder.')
+        strategy.infoGaps.push('Average-scenario margin is undefined — the card summary has no value to show.')
       }
     }
 

@@ -54,6 +54,14 @@ const DEFAULT_INDICATORS: PlotIndicators = {
   relativeHumidityAvg: 45, frostDays: 0, lastFrostDate: null, heatStressDays: 2,
   growingDegreeDaysAccum: 300, ndviAvg: 0.4, ndviDeviationVsYears: null, bareSoil: false,
   sources: ['test'], asOf: '2026-01-31', engineVersion: '1.0.0',
+  rainfallProvenance: {
+    source: 'test', product: 'test', version: 'v1', asOf: '2026-01-31', latencyDays: 0,
+    kind: 'historical', origin: 'simulated',
+  },
+  moistureAnomalyProvenance: {
+    source: 'test', product: 'test', version: 'v1', asOf: '2026-01-31', latencyDays: 0,
+    kind: 'estimated', origin: 'simulated',
+  },
 }
 
 const DEFAULT_STATIC_PROFILE = {
