@@ -15,6 +15,7 @@ import { analyzePlotGeometry, plotPointForLookup } from '../geo/plotGeometry'
 import { classifyIntent } from '../engines/via/intents'
 import { buildViaAnswer, type ViaContext } from '../engines/via'
 import { createAnswerPolisherFromEnv } from '../engines/via/polisher'
+import { retrieveCropNotes } from '../engines/via/retrieval'
 import { findUnsupportedNumbers } from '../engines/via/verification'
 import type { GenerateStrategiesInput } from '../engines/rotation'
 import type { PlotSnapshot, CropCatalogEntry } from '../types/firestoreDocs'
@@ -440,8 +441,11 @@ plotsRouter.post('/plots/:id/via/ask', async (req, res, next) => {
     // Optional AI rewriting: only accepted when every figure it returns is already in the
     // evidence. Otherwise the verified template answer is returned untouched.
     if (viaAnswerPolisher) {
+      const retrievedContext = modeloClient
+        ? await retrieveCropNotes(modeloClient, question, plot.currentCrop).catch(() => '')
+        : ''
       const polished = await viaAnswerPolisher.polish({
-        question, answer: answer.answer, evidence: answer.evidence,
+        question, answer: answer.answer, evidence: answer.evidence, retrievedContext,
       })
       if (polished !== null) {
         if (findUnsupportedNumbers(polished, answer.evidence).length === 0) {

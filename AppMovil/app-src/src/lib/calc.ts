@@ -30,3 +30,13 @@ export function addDays(date: string, days: number) {
   return d.toISOString().slice(0, 10)
 }
 export const fmtDate = (s: string) => (s ? new Date(s + 'T12:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }) : '—')
+
+// Recomendación simple basada en reglas, no un pronóstico: útil mientras no hay un servicio
+// meteorológico predictivo conectado (ver services/config.ts, INTEGRATIONS.weather).
+export function weatherRecommendation(temp: number, humidity: number, rainProb: number): string {
+  if (rainProb >= 60) return 'Buena probabilidad de lluvia: puedes posponer el riego de hoy y revisar que tus drenajes estén despejados.'
+  if (temp >= 30) return 'Temperaturas altas: riega temprano en la mañana o al atardecer para reducir la evaporación.'
+  if (humidity >= 75) return 'Humedad alta: vigila tu cultivo por posible presencia de hongos, sobre todo en zonas con poca ventilación.'
+  if (temp <= 10) return 'Temperaturas bajas: si tienes cultivos sensibles al frío, considera protegerlos durante la noche.'
+  return 'Condiciones estables: buen momento para labores de mantenimiento y para revisar el estado general de tu parcela.'
+}

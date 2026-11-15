@@ -1,6 +1,6 @@
 import type {
   NDVIMODIS, ClimaNASA, ClimaDiario, EvaluacionModelo, MunicipioDetectado, VentanaInput,
-  PrediccionInput, PreciosInput, PreciosSIAP,
+  PrediccionInput, PreciosInput, PreciosSIAP, CultivoInfo,
 } from './modeloTypes'
 
 export class ModeloHttpError extends Error {}
@@ -60,5 +60,11 @@ export class ModeloClient {
 
   municipio(latitud: number, longitud: number): Promise<MunicipioDetectado> {
     return this.request(`/api/v1/municipio?latitud=${latitud}&longitud=${longitud}`)
+  }
+
+  // Full INIFAP catalog (Modelo/datasets/cultivos_inifap.json), used by engines/via/retrieval.ts
+  // as the knowledge base for VÍA's grounding, not by the rotation scorer (see INTEGRACION.md §5).
+  cultivos(): Promise<CultivoInfo[]> {
+    return this.request('/api/v1/cultivos')
   }
 }

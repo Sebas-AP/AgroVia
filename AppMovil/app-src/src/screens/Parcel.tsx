@@ -8,7 +8,7 @@ import { getIndicators, getWeather, missingFields } from '../services'
 import { DEMO_PARCEL, CROPS } from '../services/demoData'
 import { getRealSnapshot } from '../services/backend'
 import { useAsync } from '../lib/useAsync'
-import { fmtDate } from '../lib/calc'
+import { fmtDate, weatherRecommendation } from '../lib/calc'
 import type { Parcel } from '../types'
 
 const blank = (): Parcel => ({ id: crypto.randomUUID(), demo: false, name: '', areaHa: '', terrain: '', soil: '', water: '', irrigation: '', crop: '', sowingDate: '', stage: '', center: { lat: 20.5, lon: -103.5 }, polygon: [], country: '', state: '', municipality: '', locality: '', altitude: '', events: [], seasons: [] })
@@ -57,8 +57,7 @@ function Summary({ edit }: { edit: () => void }) {
       </div>
       <Card className="bg-forest text-warm border-forest">
         <p className="text-sm font-extrabold tracking-wide text-warning flex items-center gap-1.5"><Sparkles size={16} />LO QUE DEBES SABER HOY</p>
-        {w.loading ? <p className="mt-2">Consultando…</p> : <p className="text-[17px] font-semibold mt-1.5 leading-snug">{w.data?.note}</p>}
-        <p className="text-[13px] mt-2 text-soft font-semibold">Mensaje de demostración: aún no hay pronóstico real conectado.</p>
+        {w.loading || !w.data ? <p className="mt-2">Consultando…</p> : <p className="text-[17px] font-semibold mt-1.5 leading-snug">{weatherRecommendation(real.data?.airTempAvg ?? w.data.temp, real.data?.relativeHumidityAvg ?? w.data.humidity, w.data.rainProb)}</p>}
       </Card>
       <section>
         <Title sub="Condiciones disponibles ahora">Clima</Title>

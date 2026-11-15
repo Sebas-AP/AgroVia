@@ -7,7 +7,7 @@ import { getBuyers, getIndicators, getWeather } from '../services'
 import { useAsync } from '../lib/useAsync'
 import { DEMO_PARCEL } from '../services/demoData'
 import { getRealSnapshot } from '../services/backend'
-import { mxn } from '../lib/calc'
+import { mxn, weatherRecommendation } from '../lib/calc'
 
 export default function Home() {
   const { parcel, userName, go, set, business } = useApp()
@@ -49,7 +49,8 @@ export default function Home() {
       </Card>
       <Card className="border-warning border-2 !bg-warning/15 flex gap-3">
         <AlertTriangle className="text-[#8a6208] shrink-0 mt-0.5" />
-        <div><p className="font-extrabold text-[#6b4b05]">Alerta de hoy</p><p className="text-[16px] font-semibold">{w.data?.note || 'Revisando condiciones…'}</p><p className="text-[13px] font-bold text-graphite/60 mt-1">Mensaje de demostración</p></div>
+        <div><p className="font-extrabold text-[#6b4b05]">Lo que debes saber hoy</p>
+          <p className="text-[16px] font-semibold">{w.data ? weatherRecommendation(real.data?.airTempAvg ?? w.data.temp, real.data?.relativeHumidityAvg ?? w.data.humidity, w.data.rainProb) : 'Revisando condiciones…'}</p></div>
       </Card>
       {ndvi && nv !== undefined && (
         <Card onClick={() => go('intel', 'pulso')} className="flex items-center gap-4">

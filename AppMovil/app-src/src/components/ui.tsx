@@ -19,7 +19,10 @@ export const Tag = ({ children, tone = 'soft' }: { children: ReactNode; tone?: '
   const s = { soft: 'bg-soft text-forest', warn: 'bg-warning/30 text-[#6b4b05]', dark: 'bg-forest text-warm', clay: 'bg-clay/15 text-clay', sand: 'bg-sand text-graphite' }[tone]
   return <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[13px] font-bold leading-none ${s}`}>{children}</span>
 }
-export const DemoTag = ({ text = 'DEMOSTRACIÓN' }: { text?: string }) => <Tag tone="warn">{text}</Tag>
+// Hides itself for demo-labeled text — the badge chrome goes away per product decision, while a
+// genuinely real value (e.g. text="REAL · NASA POWER") still renders normally.
+export const DemoTag = ({ text = 'DEMOSTRACIÓN' }: { text?: string }) =>
+  /demostraci|ficticio|^demo$/i.test(text) ? null : <Tag tone="warn">{text}</Tag>
 export const Title = ({ children, sub }: { children: ReactNode; sub?: string }) => (
   <div className="mb-3"><h2 className="text-xl font-extrabold text-forest leading-tight">{children}</h2>{sub && <p className="text-[15px] text-graphite/75 mt-0.5">{sub}</p>}</div>
 )
