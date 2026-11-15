@@ -1,6 +1,9 @@
+// No separate org.jetbrains.kotlin.android plugin: AGP 9.1.0 compiles .kt sources itself
+// (built-in Kotlin support). Applying the Kotlin plugin on top of it fails with "Cannot add
+// extension with name 'kotlin', as there is an extension already registered with that name" —
+// verified against a real build (./gradlew :app:assembleDebug) on this AGP version.
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 android {
