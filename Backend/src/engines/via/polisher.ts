@@ -120,12 +120,14 @@ export class NvidiaAnswerPolisher implements AnswerPolisher {
         signal: AbortSignal.timeout(POLISH_TIMEOUT_MS),
       })
       if (!response.ok) {
+        console.warn(`[via-polish] NVIDIA responded ${response.status}: ${await response.text()}`)
         return null
       }
       const payload = await response.json() as NvidiaResponse
       const text = payload.choices?.[0]?.message?.content?.trim()
       return text ? text : null
-    } catch {
+    } catch (err) {
+      console.warn('[via-polish] NVIDIA call failed:', err)
       return null
     }
   }
