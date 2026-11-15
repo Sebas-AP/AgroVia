@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: agrovia-modelo
+    runtime: python
+    rootDir: Modelo
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn agrovia_api.main:app --host 0.0.0.0 --port $PORT
+    # No env vars required: NASA POWER and ORNL DAAC are public, keyless APIs.
+    # modelo_agrovia.joblib and datasets/*.json are already committed to the repo.
+
+  - type: web
+    name: agrovia-backend
+    runtime: node
+    rootDir: Backend
+    buildCommand: npm install && npm run build
+    startCommand: node dist/server.js
+    envVars:
+      - key: FIREBASE_PROJECT_ID
+        value: agrovia-48930
+      - key: USE_SIMULATED_PROVIDERS
+        value: "false"
+      # Render assigns <service-name>.onrender.com by default; confirm the exact URL on the
+      # agrovia-modelo service's dashboard page after its first deploy and update this value.
+      - key: MODELO_BASE_URL
+        value: https://agrovia-modelo.onrender.com
+      - key: INTERNAL_SERVICE_KEY
+        sync: false
+      # firebase-admin needs real credentials outside the emulator — add a service-account key
+      # for project agrovia-48930 as a Render Secret File and point this at it, or set up
+      # Application Default Credentials another way before the first deploy.
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        sync: false
