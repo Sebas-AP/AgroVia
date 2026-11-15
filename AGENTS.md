@@ -4,7 +4,7 @@ These instructions apply to every AI coding agent working in this repository (Cl
 
 ## Project structure
 
-- `AppMovil/` — Flutter mobile app.
+- `AppMovil/` — Android mobile app (Kotlin, Gradle), a `WebView` wrapper around a React build.
 - `Backend/` — Express backend, including integration between the mobile app, the model API, and Firebase.
 - `Modelo/` — Python/FastAPI ML model and its deployment (Render).
 

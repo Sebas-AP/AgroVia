@@ -9,7 +9,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        if: hashFiles('AppMovil/pubspec.yaml') != ''
-      - run: scripts/lint-folder.sh AppMovil pubspec.yaml flutter analyze
-      - run: scripts/lint-folder.sh AppMovil pubspec.yaml flutter test
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+        if: hashFiles('AppMovil/AgroViaApp/agrovia-figma-android-/app/build.gradle.kts') != ''
+      - uses: gradle/actions/setup-gradle@v4
+        if: hashFiles('AppMovil/AgroViaApp/agrovia-figma-android-/app/build.gradle.kts') != ''
+      - run: scripts/lint-folder.sh AppMovil/AgroViaApp/agrovia-figma-android- app/build.gradle.kts ./gradlew :app:assembleDebug

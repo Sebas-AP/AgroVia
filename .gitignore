@@ -5,9 +5,10 @@
 .env
 *.env.local
 
-# Flutter (AppMovil)
-AppMovil/build/
-AppMovil/.dart_tool/
+# Android (AppMovil)
+AppMovil/**/build/
+AppMovil/**/.gradle/
+AppMovil/**/local.properties
 
 # Node (Backend)
 Backend/node_modules/

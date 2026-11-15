@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Merged only into debug builds: adds cleartext access to the emulator loopback dev host
+         without touching the release manifest's usesCleartextTraffic="false". -->
+    <application android:networkSecurityConfig="@xml/network_security_config_debug" />
+</manifest>
