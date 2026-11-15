@@ -1,10 +1,9 @@
 # AGROVÍA
+An agricultural decision-support tool for rainfed farmers in the highlands of Durango, Mexico, built for the "Adapting Farms with NASA Data" challenge at the 2026 NASA Space Apps Challenge.
 
-Herramienta de apoyo a decisiones agrícolas para productores de temporal del altiplano de Durango, México. Construida para el reto **"Adapting Farms with NASA Data"** del NASA Space Apps Challenge 2026.
+AGROVÍA takes historical environmental data from open NASA sources and cross-references it with plot-specific characteristics, documented agronomic criteria, and official Mexican crop prices to deliver a side-by-side comparison of crop rotation strategies. Each strategy breaks down the rationale behind the recommendation, the supporting evidence, potential benefits, estimated returns, data gaps, and key risks for a local agronomist to review.
 
-AGROVÍA toma el historial ambiental de fuentes abiertas de NASA, lo cruza con las características de la parcela, criterios agronómicos documentados y precios oficiales de México, y entrega una comparación de **estrategias de rotación de cultivos**. Cada estrategia explica por qué se sugiere, con qué evidencia, qué beneficios tiene, cuánto podría dejar, qué información falta y qué riesgos debe revisar un agrónomo local.
-
-**No diagnostica, no pronostica el clima y no sustituye al técnico agrícola.** Explica lo que los datos muestran y dice con claridad lo que no sabe.
+**It does not diagnose crop issues, forecast the weather, or replace an agricultural extension agent. Instead, it explains what the data shows—and clearly states what it doesn't know.
 
 Zona piloto: Guadalupe Victoria, Durango (24.4497 N, −104.1225 W, ~2,000 msnm).
 
