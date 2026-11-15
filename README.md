@@ -9,16 +9,16 @@ Zona piloto: Guadalupe Victoria, Durango (24.4497 N, −104.1225 W, ~2,000 msnm)
 
 ---
 
-## Estado del proyecto
+## Project status
 
-| Parte | Estado |
+| Part | Status |
 |---|---|
-| `Backend/` | Funcional. Rutas `/plots/:id/*` protegidas con ID token de Firebase (`plotOwnerAuth`); `/internal/*` con llave de servicio. Proveedores **simulados por defecto**; clima, humedad de suelo, NDVI y precios pueden venir reales del Modelo con `USE_SIMULATED_PROVIDERS=false` + `MODELO_BASE_URL` (los cuatro cambian juntos). Criterios de cultivo y perfil estático de suelo siguen simulados en toda configuración. |
-| `Modelo/` | Funcional. Modelo entrenado y clientes **reales** de NASA POWER y MODIS; expone clima diario real en `/api/v1/clima/diario` y precios SIAP reales en `/api/v1/precios`. |
-| `AppMovil/` | WebView que carga el prototipo de interfaz. **No consume el backend todavía.** |
-| Integración | **Parcial.** Backend ↔ Modelo ya conectados (clima diario, humedad de suelo derivada, NDVI, precios, predicción). La app todavía no llama al Backend. |
+| `Backend/` | Functional. Routes `/plots/:id/*` protected with Firebase ID tokens (`plotOwnerAuth`); `/internal/*` using a service account key. Providers **mocked by default**; weather, soil moisture, NDVI, and crop prices can be pulled live from the Model using `USE_SIMULATED_PROVIDERS=false` + `MODELO_BASE_URL` (all four switch together.). Crop criteria and the static soil profile remain mocked across all configurations. |
+| `Modelo/` | Functional. Trained model and clients **real-world** the NASA POWER y MODIS; exposes live daily weather data on `/api/v1/clima/diario` and live SIAP prices on `/api/v1/precios`. |
+| `AppMovil/` | WebView that the UI prototype loads. **It does not consume the backend yet.** |
+| Integration | **Parcial.** Backend ↔ already connected to the Model (daily weather, derived soil moisture, NDVI, crop prices, predictions). The app does not call the Backend yet. |
 
-Esto es un prototipo de hackatón. La autenticación existe, pero el despliegue público sigue sin endurecerse (ver *Limitaciones conocidas*).
+This is a hackathon prototype. Authentication is in place, but the public deployment has not yet been hardened (see Known Limitations).
 
 ---
 
