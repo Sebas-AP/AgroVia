@@ -21,10 +21,11 @@ services:
         value: agrovia-48930
       - key: USE_SIMULATED_PROVIDERS
         value: "false"
-      # Render assigns <service-name>.onrender.com by default; confirm the exact URL on the
-      # agrovia-modelo service's dashboard page after its first deploy and update this value.
+      # Render appended a random suffix to both service names on first deploy (name collision
+      # avoidance) — the live hostname is agrovia-modelo-beul, not agrovia-modelo. Confirm on
+      # the agrovia-modelo service's dashboard page if this is ever recreated.
       - key: MODELO_BASE_URL
-        value: https://agrovia-modelo.onrender.com
+        value: https://agrovia-modelo-beul.onrender.com
       - key: INTERNAL_SERVICE_KEY
         sync: false
       # firebase-admin needs real credentials outside the emulator — add a service-account key
