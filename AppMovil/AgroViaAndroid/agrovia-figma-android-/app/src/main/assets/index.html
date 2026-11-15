@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f5efdf">
+  <title>AGROVÍA</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <button class="brand" onclick="goTab('parcel')" aria-label="Inicio AGROVÍA">
+        <span class="brand-mark">A<span>V</span></span>
+        <span class="brand-name">AGROVÍA<small>DEL ESPACIO A TU TIERRA</small></span>
+      </button>
+      <div class="top-actions">
+        <button class="icon-button" onclick="toast('No tienes notificaciones nuevas')" aria-label="Notificaciones">♧<i class="notification-dot"></i></button>
+        <button class="avatar-user" onclick="openProfile()" aria-label="Perfil">L</button>
+      </div>
+    </header>
+
+    <main id="screen" class="screen" aria-live="polite"></main>
+
+    <nav class="bottom-nav" aria-label="Navegación principal">
+      <button class="nav-item active" data-tab="parcel" onclick="goTab('parcel')"><span class="nav-icon">⌖</span><span>Mi parcela</span></button>
+      <button class="nav-item" data-tab="intelligence" onclick="goTab('intelligence')"><span class="nav-icon">✦</span><span>Inteligencia</span></button>
+      <button class="nav-item" data-tab="market" onclick="goTab('market')"><span class="nav-icon">▤</span><span>Mercado</span></button>
+    </nav>
+    <div id="toast" class="toast" role="status"></div>
+    <div id="modal-root"></div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
