@@ -3,6 +3,7 @@ import { getAdminFirestore } from '../firestore/admin'
 import { COLLECTIONS } from '../firestore/collections'
 import { computeCellId } from '../firestore/cellId'
 import { notFound, badRequest } from '../middleware/errorHandler'
+import { plotOwnerAuth } from '../middleware/plotOwnerAuth'
 import { computeIndicators } from '../engines/indicators'
 import { generateStrategies } from '../engines/rotation'
 import { computeEconomicResult, computeScenarioPrices } from '../engines/economics'
@@ -16,6 +17,8 @@ import type { BusinessInputs } from '../types/business'
 import type { RotationStrategy } from '../types/strategy'
 
 export const plotsRouter = Router()
+
+plotsRouter.use('/plots/:id', plotOwnerAuth)
 
 const climateProvider = new SimulatedClimateProvider()
 const soilMoistureProvider = new SimulatedSoilMoistureProvider()

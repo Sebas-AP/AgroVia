@@ -13,6 +13,17 @@ jobs:
         with:
           node-version: "20"
         if: hashFiles('Backend/package.json') != ''
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+        if: hashFiles('Backend/package.json') != ''
       - run: scripts/lint-folder.sh Backend package.json npm ci
       - run: scripts/lint-folder.sh Backend package.json npx eslint .
-      - run: scripts/lint-folder.sh Backend package.json npx vitest run
+      # Tests hit the Firestore/Auth emulators (local, no real project or credentials) rather
+      # than live Firebase. emulators:exec needs the repo-root firebase.json, so this step (unlike
+      # the ones above) can't go through lint-folder.sh's "cd Backend, then exec" shape; it
+      # reproduces the same skip-if-no-manifest behavior with the hashFiles condition instead.
+      - name: Test (Firestore + Auth emulators)
+        if: hashFiles('Backend/package.json') != ''
+        run: npx firebase-tools emulators:exec --only firestore,auth --project agrovia-ci "cd Backend && npx vitest run"
