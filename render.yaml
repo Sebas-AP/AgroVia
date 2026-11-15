@@ -33,8 +33,9 @@ services:
         value: https://agrovia-modelo-beul.onrender.com
       - key: INTERNAL_SERVICE_KEY
         sync: false
-      # firebase-admin needs real credentials outside the emulator — add a service-account key
-      # for project agrovia-48930 as a Render Secret File and point this at it, or set up
-      # Application Default Credentials another way before the first deploy.
-      - key: GOOGLE_APPLICATION_CREDENTIALS
+      # firebase-admin needs real credentials outside the emulator. Render Secret Files aren't
+      # reachable through this Blueprint flow, so server.ts reads the whole service-account
+      # JSON (project agrovia-48930) from this one var instead of a file path — set its value
+      # in the Render dashboard (Environment tab), never commit it.
+      - key: FIREBASE_SERVICE_ACCOUNT_KEY
         sync: false
