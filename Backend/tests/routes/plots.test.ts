@@ -128,3 +128,45 @@ describe('POST /plots/:id/economics', () => {
     expect(res.body.result.investment).toBe(100 + 200 + 50 + 300 + 150 + 80 + 20)
   })
 })
+
+describe('end-to-end with simulated providers: sow a plot, generate rotations, read them back', () => {
+  it('produces strategies with complete economics and evidence, readable after the fact', async () => {
+    const db = getAdminFirestore()
+    const plotId = 'e2e-test-plot'
+    const ownerUid = 'e2e-owner'
+    const now = new Date().toISOString()
+
+    // "Sembrar": the farmer registers the plot once, with its recorded season history — no
+    // separate sowing endpoint exists; this is the same write seedDemoPlot.ts does for the
+    // demo plot.
+    await db.collection(COLLECTIONS.plots).doc(plotId).set({
+      ownerUid, name: 'E2E test plot', center: { lat: 24.44, lon: -104.12 }, areaHa: 7.5,
+      mode: 'rainfed', currentCrop: 'corn', declaredSoilType: 'franco', elevationM: 1950,
+      country: 'Mexico', state: 'Durango', municipality: 'Guadalupe Victoria', locality: 'Test',
+      powerCellId: 'power:24.0:-104.375', gpmCellId: 'gpm:24.4:-104.2', smapCellId: 'smap:24.4:-104.08',
+      priorities: { water: 3, income: 3, forage: 2, nitrogen: 2, erosion: 2, organicMatter: 2, market: 2 },
+      constraints: { waterAvailability: 'medium', equipment: [] }, origin: 'demo',
+      createdAt: now, updatedAt: now,
+    })
+    await db.collection(COLLECTIONS.plotSeasons(plotId)).doc('2025').set({ year: 2025, crop: 'beans', origin: 'demo' })
+
+    const ownerToken = `Bearer ${await mintIdTokenForUid(ownerUid)}`
+
+    const posted = await request(createApp()).post(`/plots/${plotId}/rotations`).set('authorization', ownerToken).send({})
+    expect(posted.status).toBe(200)
+    expect(posted.body.strategies.length).toBeGreaterThanOrEqual(3)
+
+    const got = await request(createApp()).get(`/plots/${plotId}/rotations`).set('authorization', ownerToken)
+    expect(got.status).toBe(200)
+    expect(got.body.strategies.map((s: { id: string }) => s.id).sort())
+      .toEqual(posted.body.strategies.map((s: { id: string }) => s.id).sort())
+
+    for (const strategy of got.body.strategies) {
+      expect(strategy.evidence.length).toBeGreaterThan(0)
+      expect(strategy.economics.length).toBeGreaterThan(0)
+      for (const scenario of strategy.economics) {
+        expect(scenario.result).toMatchObject({ investment: expect.any(Number), revenue: expect.any(Number) })
+      }
+    }
+  })
+})

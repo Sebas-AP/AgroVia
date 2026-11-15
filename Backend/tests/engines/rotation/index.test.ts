@@ -65,7 +65,22 @@ describe('generateStrategies', () => {
   })
 
   it('caps the number of generated alternatives at maxAlternatives and records how many were discarded', () => {
-    // 6 mutually-compatible crops -> C(6,2) = 15 candidate pairs, well past any reasonable cap.
+    // 20 mutually-compatible crops -> C(20,2) = 190 candidate pairs, far past the default cap.
+    const manyCrops = Array.from({ length: 20 }, (_, i) => ({
+      id: `crop-${i}`, name: `Crop ${i}`, cycleDays: 100, baseTempC: 10, optimalTempC: 20, maxTempC: 30,
+      waterRequiredMm: 300 + i * 10, fixesNitrogen: false, rootDepthCm: 50,
+      organicMatterContribution: 'medium' as const, pestRisk: [],
+      plantingWindow: { start: '06-01', end: '07-01' }, droughtTolerance: 'medium' as const,
+      source: 'test', reference: 'test', criterionType: 'assumed' as const,
+    }))
+    const input = demoRotationInput({ seasons: [] })
+    const strategies = generateStrategies({ ...input, catalog: manyCrops })
+    const alternatives = strategies.filter((s) => s.type === 'alternative')
+    expect(alternatives.length).toBe(5) // default maxAlternatives
+    expect(strategies.flatMap((s) => s.infoGaps).join(' ')).toMatch(/185 additional alternative/)
+  })
+
+  it('caps at an explicitly configured maxAlternatives too, not just the default', () => {
     const manyCrops = Array.from({ length: 6 }, (_, i) => ({
       id: `crop-${i}`, name: `Crop ${i}`, cycleDays: 100, baseTempC: 10, optimalTempC: 20, maxTempC: 30,
       waterRequiredMm: 300 + i * 10, fixesNitrogen: false, rootDepthCm: 50,
