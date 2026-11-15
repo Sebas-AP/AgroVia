@@ -105,9 +105,17 @@ espera (son el mismo modelo), así que no hay fabricación: ver el código y los
 Todo en la rama `integracion/fase-1`, en commits temáticos pequeños (`git log --oneline`):
 
 1. Este documento.
-2. AppMovil (k)(l)(m)(n) + AGENTS.md Flutter→Android. **No verificado con un build real**: este
-   entorno no tiene Android SDK instalado, así que `./gradlew :app:assembleDebug` no se pudo
-   ejecutar aquí. Primera verificación real: CI, o Android Studio en una máquina con el SDK.
+2. AppMovil (k)(l)(m)(n) + AGENTS.md Flutter→Android. **Verificado con un build real**: este
+   entorno sí tenía un SDK de Android completo ya instalado (`~/Android/Sdk`), solo sin
+   `local.properties` apuntando a él. `./gradlew :app:assembleDebug` reveló dos problemas reales
+   que el build nunca había ejercitado: `gradlew` había perdido su bit ejecutable (quedó
+   `100644` en git, probablemente por el movimiento de carpeta de la sección 2 — habría fallado
+   en CI igual), y el plugin `org.jetbrains.kotlin.android` que agregué en el primer commit de
+   esta fase **rompe el build con AGP 9.1.0**, que ya trae soporte de Kotlin incorporado
+   (`ComponentImpl$builtInKotlinSupportMode` en su jar) — aplicar el plugin aparte duplica el
+   registro de la extensión `kotlin`. Corregido: se quitó el plugin, se restauró el bit
+   ejecutable. `./gradlew clean :app:assembleDebug` compila y genera `app-debug.apk`, repetido
+   dos veces (con caché y en limpio) para confirmar que no es casualidad.
 3. Backend (a): `plotOwnerAuth` — probado contra emuladores reales de Firestore y Auth (ningún
    emulador estaba conectado antes; tuve que levantarlos para poder verificar esto y todo lo que
    sigue). `backend-ci.yml` arreglado para hacer lo mismo en CI (antes se habría colgado:
@@ -131,8 +139,8 @@ Todo en la rama `integracion/fase-1`, en commits temáticos pequeños (`git log 
     esta sesión, y no hay ningún `README.md` en la raíz hoy. No se inventó uno: se deja para
     cuando el usuario lo proporcione, por instrucción explícita suya.
 
-**Backend: 113/113 pruebas.** **Modelo: 64/64 pruebas, ruff limpio.** **AppMovil: sin verificar
-localmente** (sin SDK de Android en este entorno).
+**Backend: 113/113 pruebas.** **Modelo: 64/64 pruebas, ruff limpio.** **AppMovil: build real
+verificado** (`./gradlew clean :app:assembleDebug` → `BUILD SUCCESSFUL`, APK generado).
 
 ## 7. Qué sigue simulado o bloqueado al cerrar esta fase
 
@@ -144,14 +152,13 @@ localmente** (sin SDK de Android en este entorno).
   sigue viniendo de Firestore** — ver sección 5, son decisiones, no pendientes olvidados.
 - El Modelo sigue siendo la única pieza con credenciales de Earthdata (no se tocan).
 - El frontend sigue sirviendo datos de demostración — bloqueado, ver sección 0.
-- El build de Android no se verificó localmente (sin SDK en este entorno) — ver sección 6, paso 2.
 
 ## 8. Contra los criterios de aceptación del encargo (sección 8)
 
 | Criterio | Estado |
 |---|---|
-| `./gradlew :app:assembleDebug` compila | No verificado aquí (sin Android SDK); CI reescrito para intentarlo de verdad |
-| `npm test` en Backend, `pytest` en Modelo, build de Android en CI | Backend y Modelo: sí, verificado. Android: pendiente de un entorno con SDK |
+| `./gradlew :app:assembleDebug` compila | Sí — verificado localmente, dos veces (ver sección 6, paso 2) |
+| `npm test` en Backend, `pytest` en Modelo, build de Android en CI | Backend y Modelo: sí, verificado. Android: el build en sí ya se verificó localmente; queda ver que `appmovil-ci.yml` lo reproduzca igual en el runner de GitHub (SDK de Android preinstalado en `ubuntu-latest`, no se agregó un paso explícito de instalación) |
 | `USE_SIMULATED_PROVIDERS=true` sin red ni credenciales | Sí |
 | `USE_SIMULATED_PROVIDERS=false` + Modelo corriendo → NDVI real + `modelSuccess` real | Sí (clima para indicadores y catálogo de cultivos quedan simulados — sección 5) |
 | Sin token → 401, token de otro dueño → 403 | Sí |
