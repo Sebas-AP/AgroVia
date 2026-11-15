@@ -1,6 +1,5 @@
 import type { Request, Response, NextFunction } from 'express'
-import { getAuth } from 'firebase-admin/auth'
-import { getAdminFirestore } from '../firestore/admin'
+import { getAdminFirestore, getAdminAuth } from '../firestore/admin'
 import { COLLECTIONS } from '../firestore/collections'
 import { unauthorized, forbidden } from './errorHandler'
 import type { PlotSnapshot } from '../types/firestoreDocs'
@@ -25,7 +24,7 @@ export async function plotOwnerAuth(req: Request, _res: Response, next: NextFunc
 
   let uid: string
   try {
-    uid = (await getAuth().verifyIdToken(token)).uid
+    uid = (await getAdminAuth().verifyIdToken(token)).uid
   } catch {
     next(unauthorized('Invalid or expired token.'))
     return

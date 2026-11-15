@@ -18,6 +18,10 @@ const EARTH_RADIUS_M = 6371008.8
 const SQUARE_METRES_PER_HECTARE = 10_000
 // Coordinates closer than this are treated as the same vertex when detecting closure.
 const CLOSE_EPSILON = 1e-9
+// Below this, a ring is treated as degenerate (collinear/zero-area) rather than a real boundary.
+// 1 m^2 comfortably clears the floating-point noise floor of the projection below (~2e-3 m^2 for
+// an exactly collinear ring, measured directly) while staying far under any real plot's area.
+const DEGENERATE_AREA_SQUARE_METRES = 1
 
 function toRadians(degrees: number): number {
   return (degrees * Math.PI) / 180
@@ -92,23 +96,31 @@ export function validatePolygon(value: unknown): PolygonValidation {
   if (errors.length > 0) {
     return { ok: false, errors }
   }
-  if (planarAreaSquareMetres(ring) < 1e-6) {
+  if (planarAreaSquareMetres(ring) < DEGENERATE_AREA_SQUARE_METRES) {
     return { ok: false, errors: ['polygon encloses no area (its vertices are collinear)'] }
   }
   return { ok: true, value: ring }
 }
 
-// Shoelace area on an equirectangular projection around the mean latitude, in square metres.
-// Used only to reject a degenerate ring: on a sphere, vertices that are exactly collinear in
-// lat/lon can still enclose a thin sliver under the geodesic formula below.
+// Shoelace area on an equirectangular projection around the mean latitude, in actual square
+// metres (degrees converted to radians and scaled by Earth's radius before the shoelace sum —
+// without that conversion this returned square *degrees*, off from real square metres by a
+// factor of roughly (EARTH_RADIUS_M * pi/180)^2 ~= 1.2e10, which silently made the "degenerate"
+// threshold below reject any real plot smaller than roughly a hectare). Used only to reject a
+// truly degenerate ring: on a sphere, vertices that are exactly collinear in lat/lon can still
+// enclose a thin sliver under the geodesic formula below.
 function planarAreaSquareMetres(ring: LatLon[]): number {
   const meanLat = ring.reduce((sum, vertex) => sum + vertex.lat, 0) / ring.length
   const longitudeScale = Math.cos(toRadians(meanLat))
+  const projected = ring.map((vertex) => ({
+    x: toRadians(vertex.lon) * longitudeScale * EARTH_RADIUS_M,
+    y: toRadians(vertex.lat) * EARTH_RADIUS_M,
+  }))
   let twiceArea = 0
-  for (let i = 0; i < ring.length; i++) {
-    const current = ring[i]
-    const next = ring[(i + 1) % ring.length]
-    twiceArea += current.lon * longitudeScale * next.lat - next.lon * longitudeScale * current.lat
+  for (let i = 0; i < projected.length; i++) {
+    const current = projected[i]
+    const next = projected[(i + 1) % projected.length]
+    twiceArea += current.x * next.y - next.x * current.y
   }
   return Math.abs(twiceArea / 2)
 }

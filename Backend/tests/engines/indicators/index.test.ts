@@ -96,4 +96,14 @@ describe('computeIndicators', () => {
     const result = computeIndicators(input)
     expect(result.moistureAnomalyPctl).toBeNull()
   })
+
+  it('degrades gracefully to null NDVI figures instead of throwing when NDVI is unavailable', () => {
+    // routes/plots.ts substitutes [] when the real NDVI provider rejects (ORNL DAAC down/slow is
+    // supplementary, not fatal) — this is the contract that fallback relies on.
+    const input = { ...buildInput(), ndvi: [] }
+    const result = computeIndicators(input)
+    expect(result.ndviAvg).toBeNull()
+    expect(result.ndviProvenance).toBeNull()
+    expect(result.bareSoil).toBeNull()
+  })
 })

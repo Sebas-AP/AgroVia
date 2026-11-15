@@ -95,6 +95,26 @@ describe('validatePolygon', () => {
       expect(result.errors.join(' ')).toMatch(/distinct vertices/)
     }
   })
+
+  it('accepts a genuinely small real plot (~1 ha), not just the ~9.6 ha fixture', () => {
+    // Regression: the degenerate-area pre-check used to compare square *degrees* against a
+    // threshold calibrated for square *metres*, which silently rejected any real plot smaller
+    // than roughly a hectare as "collinear" — caught by testing an actual small polygon, not the
+    // larger fixture every other test in this file happens to use.
+    const halfSideDeg = 0.00045 // ~50 m half-side -> ~1 ha square
+    const small = [
+      { lat: CENTER.lat - halfSideDeg, lon: CENTER.lon - halfSideDeg },
+      { lat: CENTER.lat - halfSideDeg, lon: CENTER.lon + halfSideDeg },
+      { lat: CENTER.lat + halfSideDeg, lon: CENTER.lon + halfSideDeg },
+      { lat: CENTER.lat + halfSideDeg, lon: CENTER.lon - halfSideDeg },
+    ]
+    const result = validatePolygon(small)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(polygonAreaHa(result.value)).toBeGreaterThan(0.5)
+      expect(polygonAreaHa(result.value)).toBeLessThan(1.5)
+    }
+  })
 })
 
 describe('polygon geometry', () => {

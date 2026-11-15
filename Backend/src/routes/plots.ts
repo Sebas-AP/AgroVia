@@ -63,7 +63,11 @@ async function computeCurrentIndicators(plot: PlotSnapshot, catalog: CropCatalog
     // The real soil-moisture provider derives GWETTOP/GWETROOT/TS from the same NASA POWER
     // daily window, so it is keyed by the same power cell (it memoizes the climate series).
     soilMoistureProvider.getDailySeries(plot.powerCellId, from, to),
-    ndviProvider.getSeries(modisCellId, from, to),
+    // NDVI is supplementary (same principle Modelo's own OrnlMODISClient comment states) — ORNL
+    // DAAC being slow or down must not take out climate/soil-moisture too. An empty series makes
+    // computeIndicators report ndviAvg/ndviProvenance as null, which the rotation engine already
+    // turns into an infoGap rather than fabricating a value.
+    ndviProvider.getSeries(modisCellId, from, to).catch(() => []),
   ])
 
   const cropBaseTempC = catalog.find((c) => c.id === plot.currentCrop)?.baseTempC ?? 10
