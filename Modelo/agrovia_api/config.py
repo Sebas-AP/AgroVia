@@ -22,6 +22,9 @@ MUNICIPALITIES_PATH = Path(
     )
 )
 MODEL_PATH = Path(os.environ.get("AGROVIA_MODEL_PATH", MODELO_DIR / "modelo_agrovia.joblib"))
+PRICES_PATH = Path(
+    os.environ.get("AGROVIA_PRICES_PATH", DATASETS_DIR / "precios_siap_durango.json")
+)
 
 DEFAULT_PARCEL_EXAMPLE = Path(
     os.environ.get(

@@ -175,3 +175,39 @@ def test_cultivos_returns_the_full_inifap_catalogue(client: TestClient) -> None:
     body = response.json()
     assert len(body) == len(load_crops())
     assert all({"cultivo_id", "nombre", "modalidad_recomendada"} <= set(entry) for entry in body)
+
+
+def test_precios_returns_real_siap_rows(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/precios",
+        json={"cultivo_id": "maiz_grano", "municipio": "Guadalupe Victoria"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["fuente"].startswith("SIAP")
+    assert body["anio_ultimo"] >= 2024
+    assert body["municipio"] == "Guadalupe Victoria"
+    assert body["registros"]
+    assert all("precio_mxn_t" in row for row in body["registros"])
+
+
+def test_precios_returns_an_explained_empty_result_for_an_unknown_municipality(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/v1/precios",
+        json={"cultivo_id": "maiz_grano", "municipio": "Nowhere"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["registros"] == []
+    assert body["anio_ultimo"] is None
+    assert "No SIAP record" in body["advertencias"][0]
+
+
+def test_precios_rejects_an_extra_field(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/precios",
+        json={"cultivo_id": "maiz_grano", "municipio": "Guadalupe Victoria", "extra": "nope"},
+    )
+    assert response.status_code == 422

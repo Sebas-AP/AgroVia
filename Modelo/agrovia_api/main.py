@@ -24,6 +24,8 @@ from .schemas import (
     EvaluacionModelo,
     MunicipioDetectado,
     ParcelaInput,
+    PreciosInput,
+    PreciosSIAP,
     PrediccionInput,
     RespuestaEvaluacion,
     VentanaInput,
@@ -145,6 +147,15 @@ def predecir(
 ) -> EvaluacionModelo:
     """Runs the trained model directly on an already-resolved feature set."""
     return service.predict_from_features(payload)
+
+
+@app.post("/api/v1/precios", response_model=PreciosSIAP)
+def precios(
+    payload: PreciosInput,
+    service: Annotated[AgroViaService, Depends(get_service)],
+) -> PreciosSIAP:
+    """Real SIAP municipal price/yield rows for one crop — see agrovia_api/prices.py."""
+    return service.fetch_prices(payload)
 
 
 @app.get("/api/v1/municipio", response_model=MunicipioDetectado)

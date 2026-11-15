@@ -21,6 +21,7 @@ from .config import CLIMATE_CACHE_TTL_SECONDS, MODEL_PATH, NDVI_CACHE_TTL_SECOND
 from .errors import InvalidCropError, InvalidModalityError, InvalidParcelError
 from .geo import nearest_municipality
 from .model_runner import ModelRunner, classify_probability
+from .prices import SiapPriceDataset, load_price_dataset, lookup_prices
 from .schemas import (
     NDVIMODIS,
     ClimaDiario,
@@ -30,6 +31,8 @@ from .schemas import (
     EvaluacionModelo,
     MunicipioDetectado,
     ParcelaInput,
+    PreciosInput,
+    PreciosSIAP,
     PrediccionInput,
     PuntajeVariable,
     PuntoClima,
@@ -77,6 +80,7 @@ class AgroViaService:
         climate_cache: TTLCache[ClimateAggregate] | None = None,
         ndvi_cache: TTLCache[NDVISeries] | None = None,
         daily_climate_cache: TTLCache[list[ClimateDailyPoint]] | None = None,
+        prices: SiapPriceDataset | None = None,
     ) -> None:
         self._climate_client = climate_client
         self._ndvi_client = ndvi_client
@@ -91,6 +95,7 @@ class AgroViaService:
         self._daily_climate_cache = daily_climate_cache or TTLCache[list[ClimateDailyPoint]](
             CLIMATE_CACHE_TTL_SECONDS
         )
+        self._prices = prices or load_price_dataset()
 
     def evaluate(self, parcela: ParcelaInput) -> RespuestaEvaluacion:
         today = self._today or date.today()
@@ -383,6 +388,11 @@ class AgroViaService:
             clase_predicha=predicted_class,
             clasificacion=classify_probability(probability),
         )
+
+    def fetch_prices(self, payload: PreciosInput) -> PreciosSIAP:
+        """Narrow route backing POST /api/v1/precios. Real SIAP rows only; an unknown
+        crop/municipality returns an empty, explained result rather than a substitute value."""
+        return lookup_prices(self._prices, payload.cultivo_id, payload.municipio, payload.anio)
 
     def detect_municipality(self, latitud: float, longitud: float) -> MunicipioDetectado:
         """Narrow route backing GET /api/v1/municipio."""

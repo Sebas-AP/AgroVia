@@ -66,6 +66,38 @@ class PrediccionInput(BaseModel):
     radiacion_mj_m2: float
 
 
+class PreciosInput(BaseModel):
+    """Input for POST /api/v1/precios: one Modelo crop id and a Durango municipality name."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cultivo_id: str = Field(..., min_length=1)
+    municipio: str = Field(..., min_length=1)
+    anio: int | None = Field(default=None, ge=1900, le=2100)
+
+
+class PrecioRegistro(BaseModel):
+    """One real SIAP row. An absent source field stays None; it is never zero-filled."""
+
+    anio: int
+    ciclo: str | None
+    modalidad: str | None
+    precio_mxn_t: float | None
+    rendimiento_t_ha: float | None
+    volumen_t: float | None
+    superficie_cosechada_ha: float | None
+
+
+class PreciosSIAP(BaseModel):
+    fuente: str
+    version: str
+    cultivo_id: str
+    municipio: str
+    anio_ultimo: int | None
+    registros: list[PrecioRegistro]
+    advertencias: list[str]
+
+
 class MunicipioDetectado(BaseModel):
     cve_mun: int
     municipio: str
