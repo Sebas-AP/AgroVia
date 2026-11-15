@@ -14,8 +14,13 @@ services:
     runtime: node
     plan: free
     rootDir: Backend
-    buildCommand: npm install && npm run build
-    startCommand: node dist/server.js
+    # `tsc`'s compiled output doesn't resolve extensionless relative imports under native Node
+    # ESM (`node dist/server.js` fails with ERR_MODULE_NOT_FOUND) — run via tsx instead, the
+    # same way src/server.ts already runs in local dev and in scripts/run-local-stack.sh.
+    # --include=dev is required: Render sets NODE_ENV=production for the install step, which
+    # otherwise skips tsx (it's a devDependency).
+    buildCommand: npm install --include=dev
+    startCommand: npx tsx src/server.ts
     envVars:
       - key: FIREBASE_PROJECT_ID
         value: agrovia-48930
