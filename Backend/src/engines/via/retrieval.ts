@@ -14,11 +14,13 @@ async function loadCatalog(client: ModeloClient): Promise<CultivoInfo[]> {
   }
   try {
     const catalog = await client.cultivos()
+    console.warn(`[via-rag] loadCatalog resolved with ${catalog.length} entries`)
     if (catalog.length > 0) {
       catalogCache = catalog
     }
     return catalog
-  } catch {
+  } catch (err) {
+    console.warn('[via-rag] loadCatalog failed:', err)
     return []
   }
 }
