@@ -13,7 +13,8 @@ AppMovil/.dart_tool/
 Backend/node_modules/
 
 # Python (Modelo)
-Modelo/__pycache__/
+__pycache__/
+*.py[cod]
 Modelo/.venv/
 Modelo/*.egg-info/
 

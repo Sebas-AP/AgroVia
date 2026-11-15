@@ -1,0 +1,12 @@
+{
+  "latitud": 24.4442,
+  "longitud": -104.1217,
+  "superficie_hectareas": 15.0,
+  "tipo_terreno": "plano",
+  "tipo_suelo": "franco",
+  "disponibilidad_agua": "limitada",
+  "sistema_riego": "temporal",
+  "cultivo_actual": "maiz_grano",
+  "fecha_siembra": "2026-06-15",
+  "etapa_crecimiento": "cosecha"
+}
