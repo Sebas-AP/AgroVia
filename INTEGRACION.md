@@ -11,7 +11,7 @@ Por la regla 7 ("no reescribas el frontend") y la sección 3 del encargo: no se 
 Lo que sí se entrega en esta fase para que ese equipo pueda avanzar sin esperar a la app:
 - Backend y Modelo integrados y verificables por HTTP de forma independiente.
 - `docs/ejemplos-api.http` con peticiones de ejemplo contra ambos servicios.
-- Una guía para el equipo de frontend (sección 10 de este plan) con la URL base, las rutas, la forma de las respuestas y qué reemplazar en su capa de `services/`.
+- `docs/guia-frontend.md`: URL base, rutas, forma exacta de las respuestas y qué reemplazar en `services/`.
 
 Los defectos (k), (l), (m), (n) de AppMovil (sección 4.3 del encargo) sí se corrigen — son del lado nativo (Gradle/Kotlin/CI/manifest), no del bundle React, y no requieren el fuente.
 
@@ -64,25 +64,96 @@ Al corregir (k)/(l)/(m)/(n) también se actualiza `AppMovil/AGENTS.md` (y la men
 2. **Despliegue del Backend:** mismo proveedor que el Modelo (Render). `MODELO_BASE_URL` queda como variable de entorno obligatoria sin URL por defecto — no se asume una IP/host fija.
 3. **Autenticación de Firebase:** anónima. No cambia el middleware del Backend (`verifyIdToken` + comparación de `uid` funciona igual para auth anónima o por correo); afecta solo al flujo de la app, que ya está bloqueado por la sección 0.
 
-## 5. Orden de trabajo
+## 5. Tres incompatibilidades de contrato encontradas al implementar la sección 2 del encargo
 
-Sigo el orden del encargo (sección 6), con el hallazgo de documentación (§1 arriba) incluido en el paso 2 porque usa los mismos archivos:
+No estaban en el diagnóstico inicial porque solo aparecen al mirar las formas de datos reales de
+los dos lados, no solo sus nombres de ruta. Las tres se resolvieron **negándome a inventar datos**
+en vez de forzar una implementación que pareciera funcionar:
 
-1. ~~`INTEGRACION.md`~~ — este archivo.
-2. AppMovil (k)(l)(m)(n) + corregir `AGENTS.md`/`CLAUDE.md` de Flutter → Android nativo.
-3. Backend (a): autenticación.
-4. Backend (b)(c)(d)(e)(f)(g)(h), con sus pruebas.
-5. Modelo (i)(j).
-6. Rutas angostas nuevas en el Modelo (`/clima`, `/ndvi`, `/predecir`, `/municipio`, `/cultivos`), con caché y pruebas.
-7. `Backend/src/integration/modeloMapper.ts` + proveedores reales (`ModeloClimateProvider`, `ModeloNdviProvider`, `ModeloCropCriteriaProvider`) detrás de `USE_SIMULATED_PROVIDERS`.
-8. Criterio `modelSuccess` en `engines/rotation/scoring.ts`.
-9. Pruebas de la sección 5 del encargo.
-10. `docs/ejemplos-api.http` + guía para frontend.
-11. Revisar/actualizar el README raíz.
+1. **Clima: agregado vs. serie diaria.** `Modelo POST /api/v1/clima` devuelve **un agregado por
+   ventana** (`lluvia_ciclo_mm, temp_media_c, ...`), porque `NasaPowerClient.fetch_cycle` ya
+   descarta los valores diarios después de agregarlos. El `ClimateProvider` del Backend
+   (`getDailySeries`) necesita **valores por día reales** — el motor de indicadores calcula días
+   de helada, GDD acumulado, balance hídrico en ventanas móviles de 5/10/15/30 días, etc., todo
+   sobre series diarias. Partir un solo número agregado en N días inventaría datos que nunca se
+   midieron, justo lo que la regla 1 prohíbe. **Decisión: no se implementa `ModeloClimateProvider`
+   contra `ClimateProvider`.** El clima sigue simulado con `USE_SIMULATED_PROVIDERS=false`. Arreglo
+   real posible a futuro: que `NasaPowerClient` conserve y expose la serie diaria que ya descarga
+   (dato real, no inventado) — no se hizo en esta fase por alcance.
+2. **Catálogo de cultivos: esquemas incompatibles.** `GET /api/v1/cultivos` (INIFAP) devuelve
+   `cultivo_id, nombre, familia, ciclo_principal, modalidad_recomendada, duracion_ciclo_dias,
+   notas_tecnicas` — ningún campo de los que el motor de rotación necesita para puntuar
+   (`waterRequiredMm, fixesNitrogen, droughtTolerance, pestRisk, organicMatterContribution`).
+   **Decisión: no se implementa `ModeloCropCriteriaProvider`.** El catálogo de Firestore sigue
+   siendo la única fuente para el puntaje de rotación; el catálogo INIFAP del Modelo queda
+   disponible por su propia ruta para quien quiera validar `cultivo_id` o mostrar
+   `notas_tecnicas`, pero no lo sustituye.
+3. **IDs de cultivo distintos entre los dos catálogos.** Sembrados por separado, con
+   convenciones distintas: Backend usa `corn`, `beans`, `forage-oats`, `forage-sorghum`; Modelo
+   usa `maiz_grano`, `frijol_pinto`, `avena_forrajera`, `sorgo_forrajero`. Se resolvió con un
+   crosswalk explícito y acotado (`Backend/src/integration/modeloCropIds.ts`, solo esos 4 pares) —
+   no es un dato inventado, es una decisión de mapeo de identificadores, normal en cualquier
+   integración. Un cultivo sin entrada en el crosswalk omite el criterio `modelSuccess` para esa
+   secuencia (registrado en `infoGaps`), no se le asigna un id al azar.
 
-## 6. Qué queda simulado al cerrar esta fase
+El criterio `modelSuccess` (fase 8) sí se implementó completo, apoyándose en `/clima` +
+`/municipio` + `/predecir` — ahí el agregado de `/clima` es exactamente la forma que `/predecir`
+espera (son el mismo modelo), así que no hay fabricación: ver el código y los commits de la fase 8.
 
-- Con `USE_SIMULATED_PROVIDERS=true` (default en pruebas): todo el Backend sigue funcionando sin red ni credenciales, como exige el encargo.
-- Con `USE_SIMULATED_PROVIDERS=false`: clima y NDVI vienen del Modelo (que a su vez llama a NASA POWER/ORNL real); el catálogo de cultivos puede venir del Modelo (INIFAP) en vez de Firestore.
-- El Modelo sigue siendo la única pieza con credenciales de Earthdata (no se tocan, viven en su entorno).
+## 6. Estado final: qué se hizo en cada fase
+
+Todo en la rama `integracion/fase-1`, en commits temáticos pequeños (`git log --oneline`):
+
+1. Este documento.
+2. AppMovil (k)(l)(m)(n) + AGENTS.md Flutter→Android. **No verificado con un build real**: este
+   entorno no tiene Android SDK instalado, así que `./gradlew :app:assembleDebug` no se pudo
+   ejecutar aquí. Primera verificación real: CI, o Android Studio en una máquina con el SDK.
+3. Backend (a): `plotOwnerAuth` — probado contra emuladores reales de Firestore y Auth (ningún
+   emulador estaba conectado antes; tuve que levantarlos para poder verificar esto y todo lo que
+   sigue). `backend-ci.yml` arreglado para hacer lo mismo en CI (antes se habría colgado:
+   no arrancaba ningún emulador).
+4. Backend (b)-(h), con pruebas — 10 pruebas nuevas, 94/94 pasando en ese punto.
+5. Modelo (j): `.joblib` fuera de LFS, script de verificación corregido (se probó que detecta la
+   regresión original antes de restaurar el fix). Modelo (i): caché en memoria por ventana/punto
+   para clima y NDVI, con fallback a lo último conocido cuando la fuente falla — nunca un valor
+   inventado cuando no hay nada en caché.
+6. Rutas angostas del Modelo (`/clima`, `/ndvi`, `/predecir`, `/municipio`, `/cultivos`),
+   comparten la misma caché que la ruta compuesta. 64/64 pruebas del Modelo pasando.
+7. `modeloMapper.ts` (ambas direcciones, con el caso de campo faltante) + `ModeloNdviProvider`
+   real detrás de `USE_SIMULATED_PROVIDERS`. `ModeloClimateProvider`/`ModeloCropCriteriaProvider`
+   no implementados — ver sección 5.
+8. Criterio `modelSuccess` en el motor de rotación, con su evidencia (`source: 'modelo-agrovia'`)
+   y su omisión honesta cuando el Modelo no responde.
+9. Pruebas de la sección 5 del encargo, incluida la de 20 cultivos compatibles y el flujo
+   extremo a extremo (sembrar → generar → leer → verificar economía/evidencia).
+10. `docs/ejemplos-api.http` + `docs/guia-frontend.md`.
+11. **Pendiente, no bloqueante**: el encargo decía "el README te lo paso aparte" — no llegó en
+    esta sesión, y no hay ningún `README.md` en la raíz hoy. No se inventó uno: se deja para
+    cuando el usuario lo proporcione, por instrucción explícita suya.
+
+**Backend: 113/113 pruebas.** **Modelo: 64/64 pruebas, ruff limpio.** **AppMovil: sin verificar
+localmente** (sin SDK de Android en este entorno).
+
+## 7. Qué sigue simulado o bloqueado al cerrar esta fase
+
+- Con `USE_SIMULATED_PROVIDERS=true` (default, y lo que corren las pruebas): todo el Backend
+  funciona sin red ni credenciales, como exige el encargo.
+- Con `USE_SIMULATED_PROVIDERS=false` y `MODELO_BASE_URL` configurado: **NDVI** viene del Modelo
+  (ORNL DAAC real) y el criterio **`modelSuccess`** llama a `/clima` + `/municipio` + `/predecir`
+  reales. **Clima para el motor de indicadores sigue simulado** y **el catálogo de cultivos
+  sigue viniendo de Firestore** — ver sección 5, son decisiones, no pendientes olvidados.
+- El Modelo sigue siendo la única pieza con credenciales de Earthdata (no se tocan).
 - El frontend sigue sirviendo datos de demostración — bloqueado, ver sección 0.
+- El build de Android no se verificó localmente (sin SDK en este entorno) — ver sección 6, paso 2.
+
+## 8. Contra los criterios de aceptación del encargo (sección 8)
+
+| Criterio | Estado |
+|---|---|
+| `./gradlew :app:assembleDebug` compila | No verificado aquí (sin Android SDK); CI reescrito para intentarlo de verdad |
+| `npm test` en Backend, `pytest` en Modelo, build de Android en CI | Backend y Modelo: sí, verificado. Android: pendiente de un entorno con SDK |
+| `USE_SIMULATED_PROVIDERS=true` sin red ni credenciales | Sí |
+| `USE_SIMULATED_PROVIDERS=false` + Modelo corriendo → NDVI real + `modelSuccess` real | Sí (clima para indicadores y catálogo de cultivos quedan simulados — sección 5) |
+| Sin token → 401, token de otro dueño → 403 | Sí |
+| Apagar el Modelo no tumba el Backend | Sí — `fetchModelSuccessByCrop` atrapa el error y anota `infoGaps`; las rotaciones se generan igual |
+| `INTEGRACION.md` explica qué quedó integrado, qué sigue simulado y qué bloquea al frontend | Este documento |
