@@ -4,6 +4,7 @@ import { plotsRouter } from './routes/plots'
 import { catalogRouter } from './routes/catalog'
 import { pricesRouter } from './routes/prices'
 import { internalRouter } from './routes/internal'
+import { authRouter } from './routes/auth'
 import { errorHandler } from './middleware/errorHandler'
 
 // /plots/:id/* routes are guarded by plotOwnerAuth (verifies the Firebase ID token and compares
@@ -18,6 +19,7 @@ export function createApp(): express.Express {
   app.use(catalogRouter)
   app.use(pricesRouter)
   app.use(internalRouter)
+  app.use(authRouter)
   app.use(errorHandler)
   return app
 }
