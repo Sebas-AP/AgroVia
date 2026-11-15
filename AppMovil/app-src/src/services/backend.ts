@@ -37,3 +37,18 @@ export async function backendFetch(path: string, init: RequestInit = {}) {
   if (!res.ok) throw new Error(`El Backend respondió ${res.status}`)
   return res.json()
 }
+
+export interface RealSnapshot {
+  ndviAvg: number | null
+  airTempAvg: number | null
+  relativeHumidityAvg: number | null
+  ndviProvenance: { origin: string } | null
+}
+// Una sola llamada real por carga de la app (clima + NDVI actuales de la parcela demo), para
+// mostrar el valor real donde la pantalla ya pedía un solo número — nunca para fabricar los 12
+// puntos de una gráfica histórica que el Backend no tiene (ver services/index.ts).
+let snapshot: Promise<RealSnapshot | null> | null = null
+export function getRealSnapshot(): Promise<RealSnapshot | null> {
+  if (!snapshot) snapshot = backendFetch(`/plots/${DEMO_PLOT_ID}/indicators`).catch(() => null)
+  return snapshot
+}

@@ -6,6 +6,7 @@ import { SatMap } from '../components/SatMap'
 import { areaHa, centroid, fmtCoord, parseCoords, ptToCoord } from '../lib/geo'
 import { getIndicators, getWeather, missingFields } from '../services'
 import { DEMO_PARCEL, CROPS } from '../services/demoData'
+import { getRealSnapshot } from '../services/backend'
 import { useAsync } from '../lib/useAsync'
 import { fmtDate } from '../lib/calc'
 import type { Parcel } from '../types'
@@ -36,6 +37,7 @@ function NoParcel({ start }: { start: () => void }) {
 function Summary({ edit }: { edit: () => void }) {
   const { parcel: p, go, set } = useApp()
   const w = useAsync(getWeather, [])
+  const real = useAsync(() => p?.demo ? getRealSnapshot() : Promise.resolve(null), [p?.demo])
   if (!p) return null
   const miss = missingFields(p)
   const loc = [p.locality, p.municipality, p.state, p.country].filter(Boolean).join(', ')
@@ -63,12 +65,16 @@ function Summary({ edit }: { edit: () => void }) {
         {w.loading ? <Loading /> : w.error ? <ErrorBox msg={w.error} retry={w.reload} /> : w.data && (
           <Card>
             <div className="grid grid-cols-2 gap-3">
-              <Stat icon={<Thermometer size={16} />} label="Temperatura" value={String(w.data.temp)} unit="°C" />
-              <Stat icon={<Droplets size={16} />} label="Humedad" value={String(w.data.humidity)} unit="%" />
+              <Stat icon={<Thermometer size={16} />} label="Temperatura" value={real.data?.airTempAvg != null ? real.data.airTempAvg.toFixed(1) : String(w.data.temp)} unit="°C" />
+              <Stat icon={<Droplets size={16} />} label="Humedad" value={real.data?.relativeHumidityAvg != null ? real.data.relativeHumidityAvg.toFixed(0) : String(w.data.humidity)} unit="%" />
               <Stat icon={<CloudRain size={16} />} label="Prob. de lluvia" value={String(w.data.rainProb)} unit="%" />
               <Stat icon={<Wind size={16} />} label="Viento" value={String(w.data.wind)} unit="km/h" />
             </div>
-            <div className="flex flex-wrap items-center gap-2 mt-3"><DemoTag /><span className="text-[13px] font-semibold text-graphite/70">{w.data.source} · {w.data.updated}</span></div>
+            {real.data?.airTempAvg != null ? (
+              <div className="flex flex-wrap items-center gap-2 mt-3"><Tag tone="soft">REAL</Tag><span className="text-[13px] font-semibold text-graphite/70">NASA POWER · temperatura y humedad reales; lluvia y viento de ejemplo</span></div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2 mt-3"><DemoTag /><span className="text-[13px] font-semibold text-graphite/70">{w.data.source} · {w.data.updated}</span></div>
+            )}
           </Card>
         )}
       </section>

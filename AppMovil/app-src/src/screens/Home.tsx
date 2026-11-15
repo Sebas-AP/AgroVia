@@ -6,15 +6,20 @@ import { SatMap } from '../components/SatMap'
 import { getBuyers, getIndicators, getWeather } from '../services'
 import { useAsync } from '../lib/useAsync'
 import { DEMO_PARCEL } from '../services/demoData'
+import { getRealSnapshot } from '../services/backend'
 import { mxn } from '../lib/calc'
 
 export default function Home() {
   const { parcel, userName, go, set, business } = useApp()
   const w = useAsync(getWeather, []), ind = useAsync(getIndicators, []), buyers = useAsync(getBuyers, [])
+  // Un solo valor actual real (no una serie de 12 meses — el Backend no tiene historial mensual,
+  // y fabricarlo violaría la regla del proyecto de no inventar datos). Solo aplica a la parcela
+  // demo: una parcela que el usuario registró no tiene registro en el Backend.
+  const real = useAsync(() => (!parcel || parcel.demo) ? getRealSnapshot() : Promise.resolve(null), [parcel?.demo])
   const hr = new Date().getHours()
   const greet = hr < 12 ? 'Buenos días' : hr < 19 ? 'Buenas tardes' : 'Buenas noches'
   const ndvi = ind.data?.[0]
-  const nv = ndvi?.series[ndvi.series.length - 1].value
+  const nv = real.data?.ndviAvg ?? ndvi?.series[ndvi.series.length - 1].value
   const crop = parcel?.crop || business.crop
   const best = (buyers.data || []).filter((b) => b.crop === crop).sort((a, b) => b.price - a.price)[0]
   return (
@@ -38,9 +43,9 @@ export default function Home() {
       <Card className="flex items-center gap-4">
         <CloudSun size={36} className="text-warning shrink-0" />
         <div className="flex-1">
-          {w.data ? <><p className="text-3xl font-extrabold text-forest leading-none">{w.data.temp}°C</p>
-            <p className="text-[14px] font-bold text-graphite/70 mt-1 flex gap-3 flex-wrap"><span className="flex items-center gap-1"><CloudRain size={14} />{w.data.rainProb} %</span><span className="flex items-center gap-1"><Droplets size={14} />{w.data.humidity} %</span><span className="flex items-center gap-1"><Wind size={14} />{w.data.wind} km/h</span></p></> : <p className="font-bold">Consultando clima…</p>}
-        </div><div className="text-right"><DemoTag text={w.data?.status === 'Conectado' ? 'REAL' : 'DEMOSTRACIÓN'} /><p className="text-[12px] font-semibold text-graphite/60 mt-1">{w.data?.source || 'Pronóstico no conectado'}</p></div>
+          {w.data ? <><p className="text-3xl font-extrabold text-forest leading-none">{real.data?.airTempAvg != null ? real.data.airTempAvg.toFixed(1) : w.data.temp}°C</p>
+            <p className="text-[14px] font-bold text-graphite/70 mt-1 flex gap-3 flex-wrap"><span className="flex items-center gap-1"><CloudRain size={14} />{w.data.rainProb} %</span><span className="flex items-center gap-1"><Droplets size={14} />{real.data?.relativeHumidityAvg != null ? real.data.relativeHumidityAvg.toFixed(0) : w.data.humidity} %</span><span className="flex items-center gap-1"><Wind size={14} />{w.data.wind} km/h</span></p></> : <p className="font-bold">Consultando clima…</p>}
+        </div><div className="text-right"><DemoTag text={real.data?.airTempAvg != null ? 'REAL · NASA POWER' : 'DEMOSTRACIÓN'} /><p className="text-[12px] font-semibold text-graphite/60 mt-1">{real.data?.airTempAvg != null ? 'Temperatura y humedad reales · lluvia/viento de ejemplo' : (w.data?.source || 'Pronóstico no conectado')}</p></div>
       </Card>
       <Card className="border-warning border-2 !bg-warning/15 flex gap-3">
         <AlertTriangle className="text-[#8a6208] shrink-0 mt-0.5" />
@@ -49,7 +54,7 @@ export default function Home() {
       {ndvi && nv !== undefined && (
         <Card onClick={() => go('intel', 'pulso')} className="flex items-center gap-4">
           <span className="size-14 rounded-2xl bg-soft grid place-items-center text-forest"><Activity size={26} /></span>
-          <span className="flex-1"><span className="block text-sm font-bold text-natural">Vigor de vegetación (NDVI)</span><span className="block text-2xl font-extrabold text-forest">{nv.toFixed(2)} <span className="text-sm font-bold text-graphite/60">{nv > 0.55 ? 'vigorosa' : nv > 0.35 ? 'moderada' : 'baja'}</span></span><span className="text-[13px] font-bold text-[#7a5a0a]">{ndvi.status === 'Disponible' ? 'REAL · satélite ORNL/MODIS' : 'DEMOSTRACIÓN · satélite no conectado'}</span></span><ArrowRight className="text-natural" /></Card>
+          <span className="flex-1"><span className="block text-sm font-bold text-natural">Vigor de vegetación (NDVI)</span><span className="block text-2xl font-extrabold text-forest">{nv.toFixed(2)} <span className="text-sm font-bold text-graphite/60">{nv > 0.55 ? 'vigorosa' : nv > 0.35 ? 'moderada' : 'baja'}</span></span><span className="text-[13px] font-bold text-[#7a5a0a]">{real.data?.ndviAvg != null ? 'REAL · satélite ORNL/MODIS' : 'DEMOSTRACIÓN · satélite no conectado'}</span></span><ArrowRight className="text-natural" /></Card>
       )}
       <div className="grid grid-cols-3 gap-2.5">
         {[{ k: 'parcel', l: 'Mi parcela', i: <MapIcon size={26} />, s: 'summary' }, { k: 'intel', l: 'Inteligencia agrícola', i: <Activity size={26} />, s: 'pulso' }, { k: 'market', l: 'Mercado', i: <Store size={26} />, s: 'precios' }].map((m) => (

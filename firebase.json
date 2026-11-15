@@ -10,5 +10,10 @@
     "auth": {
       "port": 9099
     }
+  },
+  "auth": {
+    "providers": {
+      "anonymous": true
+    }
   }
 }
