@@ -14,12 +14,12 @@ Zona piloto: Guadalupe Victoria, Durango (24.4497 N, −104.1225 W, ~2,000 msnm)
 
 | Parte | Estado |
 |---|---|
-| `Backend/` | Funcional con **proveedores de datos simulados**. Sin conexión real a NASA todavía. Sin autenticación en las rutas HTTP. |
-| `Modelo/` | Funcional. Modelo entrenado y clientes **reales** de NASA POWER y MODIS. |
+| `Backend/` | Funcional. Rutas `/plots/:id/*` protegidas con ID token de Firebase (`plotOwnerAuth`); `/internal/*` con llave de servicio. Proveedores **simulados por defecto**; clima, humedad de suelo, NDVI y precios pueden venir reales del Modelo con `USE_SIMULATED_PROVIDERS=false` + `MODELO_BASE_URL` (los cuatro cambian juntos). Criterios de cultivo y perfil estático de suelo siguen simulados en toda configuración. |
+| `Modelo/` | Funcional. Modelo entrenado y clientes **reales** de NASA POWER y MODIS; expone clima diario real en `/api/v1/clima/diario` y precios SIAP reales en `/api/v1/precios`. |
 | `AppMovil/` | WebView que carga el prototipo de interfaz. **No consume el backend todavía.** |
-| Integración | **Pendiente.** Las tres partes aún no se comunican entre sí. |
+| Integración | **Parcial.** Backend ↔ Modelo ya conectados (clima diario, humedad de suelo derivada, NDVI, precios, predicción). La app todavía no llama al Backend. |
 
-Esto es un prototipo de hackatón. No lo despliegues en público tal como está: las rutas del backend no verifican identidad.
+Esto es un prototipo de hackatón. La autenticación existe, pero el despliegue público sigue sin endurecerse (ver *Limitaciones conocidas*).
 
 ---
 
@@ -38,7 +38,7 @@ Esto es un prototipo de hackatón. No lo despliegues en público tal como está:
 │  · Motor económico                  │
 │  · Persistencia en Firestore        │
 └──────┬───────────────────┬──────────┘
-       │ Admin SDK         │ HTTP (pendiente)
+       │ Admin SDK         │ HTTP
 ┌──────▼─────────┐  ┌──────▼──────────────────┐
 │   Firestore    │  │  Modelo (FastAPI)       │
 │   + Storage    │  │  · NASA POWER           │
@@ -48,7 +48,7 @@ Esto es un prototipo de hackatón. No lo despliegues en público tal como está:
                     └─────────────────────────┘
 ```
 
-**Reparto de responsabilidades previsto:** el Modelo es dueño de los datos externos y de la predicción; el Backend es dueño del estado y de la decisión. Hoy ambos tienen su propio camino de datos y la unión está pendiente.
+**Reparto de responsabilidades:** el Modelo es dueño de los datos externos y de la predicción; el Backend es dueño del estado y de la decisión. La unión ya existe para clima diario, humedad de suelo (derivada del mismo clima), NDVI y precios (con `USE_SIMULATED_PROVIDERS=false` + `MODELO_BASE_URL`); el perfil estático de suelo y los criterios de cultivo para el puntaje de rotación siguen en Firestore/simulados.
 
 ---
 
@@ -66,8 +66,12 @@ src/
                   armonización de resoluciones, imputación
     rotation/     Generación de estrategias, filtros de compatibilidad, puntaje
     economics/    Inversión, margen, punto de equilibrio, escenarios de precio
-  providers/      Interfaces de datos, hoy con implementación simulada
+    via/          Asistente VÍA: intención, plantillas, verificación de cifras, redacción opcional
+  geo/            Validación de polígono, superficie y centroide de la parcela
+  providers/      Interfaces de datos; simulado por defecto, clima/NDVI reales vía Modelo
+  integration/    Cliente del Modelo, mapeo de contratos, IDs de cultivo
   firestore/      Admin SDK, colecciones, cálculo de celda de cuadrícula
+  middleware/     Autenticación de dueño de parcela y llave de servicio
   routes/         health, plots, catalog, prices, internal
   seed/           Catálogo de cultivos y parcela de demostración
   types/          Procedencia, estrategia, negocio, documentos de Firestore
@@ -83,6 +87,7 @@ Rutas:
 | `POST` | `/plots/:id/rotations` | Genera y guarda las estrategias de rotación |
 | `GET` | `/plots/:id/rotations` | Las últimas estrategias calculadas |
 | `POST` | `/plots/:id/economics` | Recalcula con los costos del agricultor |
+| `POST` | `/plots/:id/via/ask` | Asistente VÍA: responde una pregunta con plantillas y evidencia verificada |
 | `GET` | `/catalog/crops` | Catálogo de cultivos con sus criterios |
 | `GET` | `/prices/:crop` | Precios por cultivo |
 | — | `/internal/*` | Ingesta, validación y dataset. Requiere llave de servicio |
@@ -121,6 +126,12 @@ Rutas:
 | `GET` | `/health` | Estado y versión |
 | `POST` | `/api/v1/evaluar-parcela` | Evalúa un perfil de parcela completo |
 | `GET` | `/api/v1/evaluar-parcela/ejemplo` | Evalúa la parcela de ejemplo incluida |
+| `POST` | `/api/v1/clima` | Agregado de clima de una ventana |
+| `POST` | `/api/v1/clima/diario` | Serie diaria real de NASA POWER (solo días con dato) |
+| `POST` | `/api/v1/ndvi` | Serie NDVI de una ventana |
+| `POST` | `/api/v1/predecir` | Corre el modelo sobre variables ya resueltas |
+| `GET` | `/api/v1/municipio` | Municipio más cercano a una coordenada |
+| `GET` | `/api/v1/cultivos` | Catálogo INIFAP |
 
 **El modelo:** `Pipeline` de scikit-learn, clasificador binario de éxito de cosecha, con 8 variables de entrada:
 
@@ -163,9 +174,15 @@ cd Backend
 npm ci
 cp .env.example .env     # completa los valores
 npm run seed             # catálogo de cultivos y parcela de demostración
-npm test                 # 23 archivos de prueba
+npm test                 # 32 archivos de prueba (requieren los emuladores de Firestore y Auth)
 npm run lint
 npm run build
+```
+
+Para correr las pruebas con los emuladores, desde la raíz:
+
+```bash
+npx firebase-tools emulators:exec --only firestore,auth --project agrovia-ci "cd Backend && npm test"
 ```
 
 Las reglas e índices de Firestore están en `Backend/firestore.rules` y `Backend/firestore.indexes.json`. Despliégalos con la CLI de Firebase desde la raíz, donde están `firebase.json` y `.firebaserc`.
@@ -195,9 +212,14 @@ python test_escenarios_modelo.py
 ### AppMovil
 
 ```bash
-cd AppMovil/AgroViaAndroid/agrovia-figma-android-
+cd AppMovil/AgroViaApp/agrovia-figma-android-
 ./gradlew :app:assembleDebug
 ```
+
+From VS Code, run the default build task (`Ctrl+Shift+B`) or `Tasks: Run Task` →
+`Android: Run on emulator`. It boots the `Pixel_7` AVD if needed, builds, installs and launches
+the app. Individual steps are available as separate tasks; the underlying scripts live in
+`scripts/android/`.
 
 ---
 
@@ -287,12 +309,14 @@ Lee `CONTRIBUTING.md`. En resumen: una rama por tema, comisiones pequeñas, prue
 
 ## Limitaciones conocidas
 
-- **Las rutas del backend no verifican identidad.** Usan el Admin SDK, que se salta las reglas de Firestore. No lo expongas en público sin agregar verificación de token.
-- **Los proveedores de datos del backend son simulados.** Los datos reales de NASA hoy solo llegan a través del Modelo.
+- **Proveedores simulados por defecto.** Clima, humedad de suelo, NDVI y precios pueden ser reales (`USE_SIMULATED_PROVIDERS=false` + `MODELO_BASE_URL`, los cuatro cambian juntos), pero **el perfil estático de suelo (textura, pendiente) y el catálogo de criterios de cultivo para el puntaje de rotación siguen simulados/sembrados a mano** en toda configuración — no hay cliente de SoilGrids/SRTM, y el catálogo INIFAP del Modelo no tiene los campos que el motor de rotación necesita. Cada dato declara `provenance.origin` (`real`/`simulated`/`demo`) y la interfaz debe respetarlo. El detalle del contrato pendiente está en `INTEGRACION_FASE2.md`.
 - **La app no consume el backend.** La interfaz sirve datos de demostración.
+- **VÍA no es un modelo de lenguaje.** Responde por plantillas deterministas y verifica que toda cifra tenga evidencia. Preguntas fuera de las intenciones soportadas reciben `intent: "unknown"` sin cifras. La redacción opcional con IA está desactivada por defecto (requiere `ANTHROPIC_API_KEY` y `VIA_POLISH_MODEL`) y nunca puede introducir números nuevos.
+- **VÍA describe lo registrado, no pronostica.** No hay modelo de pronóstico: una pregunta sobre "mañana" se responde con la serie climática observada de la ventana analizada, no con una predicción.
+- **El polígono es opcional y no corrige el área declarada.** Si la superficie calculada difiere de `areaHa` más de 10 %, se reporta un `infoGap`; el área declarada nunca se sobrescribe. El cálculo asume parcelas pequeñas, no polares y sin cruzar el antimeridiano.
 - **La resolución satelital es mucho mayor que una parcela.** Una celda de SMAP mide 9 km y una de NASA POWER unos 50 km. Los indicadores son contexto regional, no medición de la parcela, y la interfaz debe decirlo.
 - **No hay sensores de campo.** El dispositivo con ESP32 se descartó por su baja viabilidad para el agricultor; las variables de suelo provienen del historial satelital.
-- **Los datos satelitales tienen latencia.** La corrida *Final* de GPM IMERG tarda meses; para fechas recientes se usa *Late*, que es menos precisa.
+- **Los datos satelitales tienen latencia.** La corrida *Final* de GPM IMERG tarda meses; para fechas recientes se usa *Late*, que es menos precisa. La latencia real de NASA POWER no la expone el Modelo: la procedencia usa `latencyDays: 0` como marcador, no como medición.
 
 ---
 
