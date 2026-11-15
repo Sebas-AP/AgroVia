@@ -169,6 +169,49 @@ def test_evaluate_raises_when_climate_fails_with_nothing_cached() -> None:
         service.evaluate(ParcelaInput.model_validate(PARCELA))
 
 
+def test_fetch_daily_climate_window_returns_the_real_per_day_values_unaggregated() -> None:
+    service, _, _ = build_service()
+    result = service.fetch_daily_climate_window(
+        24.4442, -104.1217, date(2026, 6, 15), date(2026, 6, 16),
+    )
+    assert [p.fecha for p in result.serie] == [date(2026, 6, 15), date(2026, 6, 16)]
+    assert result.serie[0].valores["RH2M"] == 41.0
+    # Day two's fake data has no RH2M — never filled in, just absent.
+    assert "RH2M" not in result.serie[1].valores
+    assert "RH2M" in result.parametros  # present overall, since at least one day had it
+
+
+def test_fetch_daily_climate_window_is_cached_and_independent_of_the_aggregate_cache() -> None:
+    service, climate, _ = build_service()
+    service.fetch_daily_climate_window(24.4442, -104.1217, date(2026, 6, 15), date(2026, 6, 16))
+    service.fetch_daily_climate_window(24.4442, -104.1217, date(2026, 6, 15), date(2026, 6, 16))
+    assert len(climate.daily_calls) == 1
+    assert len(climate.calls) == 0  # fetch_cycle (the aggregate path) was never touched
+
+
+def test_fetch_daily_climate_window_falls_back_to_cached_series_when_nasa_power_fails() -> None:
+    climate = FakeClimateClient()
+    service = AgroViaService(
+        climate_client=climate, ndvi_client=FakeNDVIClient(), model_runner=FakeModelRunner(),
+        crops=load_crops(), municipalities=load_municipalities(), today=date(2026, 11, 14),
+        daily_climate_cache=TTLCache(ttl_seconds=0.01),
+    )
+    first = service.fetch_daily_climate_window(24.4442, -104.1217, date(2026, 6, 15), date(2026, 6, 16))
+
+    time.sleep(0.02)
+    climate.daily_error = RuntimeError("NASA POWER unavailable")
+    during_outage = service.fetch_daily_climate_window(24.4442, -104.1217, date(2026, 6, 15), date(2026, 6, 16))
+
+    assert during_outage.serie == first.serie
+
+
+def test_fetch_daily_climate_window_raises_when_nasa_power_fails_with_nothing_cached() -> None:
+    service, climate, _ = build_service()
+    climate.daily_error = RuntimeError("NASA POWER unavailable")
+    with pytest.raises(RuntimeError):
+        service.fetch_daily_climate_window(24.4442, -104.1217, date(2026, 6, 15), date(2026, 6, 16))
+
+
 def test_evaluate_falls_back_to_cached_ndvi_when_ornl_fails_on_a_later_call() -> None:
     ndvi_client = FakeNDVIClient(
         series=NDVISeries(observations=[NDVIObservation(date(2026, 7, 1), 0.42)])

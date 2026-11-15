@@ -18,6 +18,7 @@ from .config import DEFAULT_PARCEL_EXAMPLE
 from .errors import EvaluationError
 from .schemas import (
     NDVIMODIS,
+    ClimaDiario,
     ClimaNASA,
     CultivoInfo,
     EvaluacionModelo,
@@ -112,6 +113,17 @@ def clima(
     """Narrow, crop-independent NASA POWER lookup — see Modelo/agrovia_api/cache.py."""
     return _run_with_upstream_errors(
         lambda: service.fetch_climate_window(ventana.latitud, ventana.longitud, ventana.inicio, ventana.fin)
+    )
+
+
+@app.post("/api/v1/clima/diario", response_model=ClimaDiario)
+def clima_diario(
+    ventana: VentanaInput,
+    service: Annotated[AgroViaService, Depends(get_service)],
+) -> ClimaDiario:
+    """Real per-day NASA POWER values for the window — see service.fetch_daily_climate_window."""
+    return _run_with_upstream_errors(
+        lambda: service.fetch_daily_climate_window(ventana.latitud, ventana.longitud, ventana.inicio, ventana.fin)
     )
 
 

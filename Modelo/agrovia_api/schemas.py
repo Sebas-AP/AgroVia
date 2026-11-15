@@ -72,6 +72,22 @@ class MunicipioDetectado(BaseModel):
     distancia_km: float
 
 
+class PuntoClima(BaseModel):
+    """One real NASA POWER day. `valores` only has the parameters that actually had a usable
+    reading that day — a missing one is just absent, never filled in or interpolated."""
+
+    fecha: date
+    valores: dict[str, float]
+
+
+class ClimaDiario(BaseModel):
+    fuente: str
+    ventana_inicio: date
+    ventana_fin: date
+    parametros: list[str]
+    serie: list[PuntoClima]
+
+
 class CultivoInfo(BaseModel):
     cultivo_id: str
     nombre: str
