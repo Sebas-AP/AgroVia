@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Android: Start emulator",
+      "detail": "Boot the Pixel_7 AVD (or $AGROVIA_AVD) and wait until Android is ready.",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/android/ensure-emulator.sh",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "Android: Build debug APK",
+      "detail": "Run ./gradlew :app:assembleDebug from the Gradle project root.",
+      "type": "shell",
+      "command": "./gradlew",
+      "args": [":app:assembleDebug", "--console=plain"],
+      "options": {
+        "cwd": "${workspaceFolder}/AppMovil/AgroViaApp/agrovia-figma-android-"
+      },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Android: Install and launch app",
+      "detail": "Install the debug APK on the running emulator and open MainActivity.",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/android/run-app.sh",
+      "options": {
+        "env": {
+          "AGROVIA_SKIP_BUILD": "1",
+          "AGROVIA_SKIP_EMULATOR": "1"
+        }
+      },
+      "dependsOn": "Android: Build debug APK",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "Android: Run on emulator",
+      "detail": "Start the emulator if needed, build, install and launch the app.",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/android/run-app.sh",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "Android: Stop emulator",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/android/stop-emulator.sh",
+      "problemMatcher": []
+    }
+  ]
+}
