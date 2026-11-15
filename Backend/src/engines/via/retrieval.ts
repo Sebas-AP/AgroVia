@@ -7,6 +7,10 @@ import type { CultivoInfo } from '../../integration/modeloTypes'
 // already in that dataset; it never generates or guesses agronomic facts.
 // Caches only a successful, non-empty catalog — Modelo's free-tier cold starts (or a transient
 // network error) must not poison this cache with [] for the rest of the process's lifetime.
+// shortcut: ModeloClient has no request timeout, so a cold Modelo start (observed up to ~85s)
+// can make this call outlast whatever bounds the caller's own request and come back empty on
+// that attempt — self-heals on the next VÍA question once the catalog has loaded successfully
+// once. Upgrade by giving ModeloClient.request() an explicit timeout if this proves too flaky.
 let catalogCache: CultivoInfo[] | null = null
 async function loadCatalog(client: ModeloClient): Promise<CultivoInfo[]> {
   if (catalogCache) {
@@ -14,13 +18,11 @@ async function loadCatalog(client: ModeloClient): Promise<CultivoInfo[]> {
   }
   try {
     const catalog = await client.cultivos()
-    console.warn(`[via-rag] loadCatalog resolved with ${catalog.length} entries`)
     if (catalog.length > 0) {
       catalogCache = catalog
     }
     return catalog
-  } catch (err) {
-    console.warn('[via-rag] loadCatalog failed:', err)
+  } catch {
     return []
   }
 }
@@ -42,9 +44,7 @@ export async function retrieveCropNotes(
     || crop.cultivo_id === currentCrop,
   )
   const picks = matches.length > 0 ? matches : catalog.slice(0, 3)
-  const result = picks
+  return picks
     .map((crop) => `${crop.nombre} (ciclo ${crop.duracion_ciclo_dias.join('-')} días, ${crop.modalidad_recomendada.join('/')}): ${crop.notas_tecnicas}`)
     .join('\n')
-  console.warn(`[via-rag] catalog=${catalog.length} picks=${picks.length} contextLen=${result.length}`)
-  return result
 }
