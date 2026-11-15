@@ -35,7 +35,6 @@ const {
 // Null unless ANTHROPIC_API_KEY and VIA_POLISH_MODEL are both configured; the template answer is
 // the default and only path otherwise.
 const viaAnswerPolisher = createAnswerPolisherFromEnv()
-console.warn(`[via-polish] NVIDIA_API_KEY present: ${Boolean(process.env.NVIDIA_API_KEY)}, polisher: ${viaAnswerPolisher ? viaAnswerPolisher.constructor.name : 'null'}`)
 
 async function getPlotOrThrow(id: string): Promise<PlotSnapshot> {
   const doc = await getAdminFirestore().collection(COLLECTIONS.plots).doc(id).get()

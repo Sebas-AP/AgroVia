@@ -5,12 +5,22 @@ import type { CultivoInfo } from '../../integration/modeloTypes'
 // catalog (Modelo/datasets/cultivos_inifap.json, served live via GET /api/v1/cultivos) is small
 // enough to keep in memory and match by keyword. Retrieval only ever returns text that is
 // already in that dataset; it never generates or guesses agronomic facts.
-let catalogCache: Promise<CultivoInfo[]> | null = null
-function loadCatalog(client: ModeloClient): Promise<CultivoInfo[]> {
-  if (!catalogCache) {
-    catalogCache = client.cultivos().catch(() => [])
+// Caches only a successful, non-empty catalog — Modelo's free-tier cold starts (or a transient
+// network error) must not poison this cache with [] for the rest of the process's lifetime.
+let catalogCache: CultivoInfo[] | null = null
+async function loadCatalog(client: ModeloClient): Promise<CultivoInfo[]> {
+  if (catalogCache) {
+    return catalogCache
   }
-  return catalogCache
+  try {
+    const catalog = await client.cultivos()
+    if (catalog.length > 0) {
+      catalogCache = catalog
+    }
+    return catalog
+  } catch {
+    return []
+  }
 }
 
 export async function retrieveCropNotes(
