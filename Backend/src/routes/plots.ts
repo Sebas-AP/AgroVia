@@ -11,7 +11,7 @@ import { SimulatedClimateProvider } from '../providers/ClimateProvider'
 import { SimulatedSoilMoistureProvider } from '../providers/SoilMoistureProvider'
 import { SimulatedNdviProvider } from '../providers/NdviProvider'
 import { SimulatedSoilProvider } from '../providers/SoilProvider'
-import { SimulatedPricesProvider } from '../providers/PricesProvider'
+import { SimulatedPricesProvider, type PricesProvider } from '../providers/PricesProvider'
 import type { PlotSnapshot, CropCatalogEntry } from '../types/firestoreDocs'
 import type { BusinessInputs } from '../types/business'
 import type { RotationStrategy } from '../types/strategy'
@@ -118,13 +118,37 @@ function hasNullRatio(result: { costPerTon: number | null; marginPct: number | n
 }
 
 async function fetchPriceHistory(crop: string, municipality: string, months: number): Promise<{ priceTon: number }[]> {
-  const points: { priceTon: number }[] = []
-  for (let i = 0; i < months; i++) {
-    const date = daysAgo(i * 30)
-    const snapshot = await pricesProvider.getSnapshot(crop, municipality, date)
-    points.push({ priceTon: snapshot.ruralAvgPriceKg * 1000 })
-  }
-  return points
+  const dates = Array.from({ length: months }, (_, i) => daysAgo(i * 30))
+  const snapshots = await Promise.all(dates.map((date) => pricesProvider.getSnapshot(crop, municipality, date)))
+  return snapshots.map((snapshot) => ({ priceTon: snapshot.ruralAvgPriceKg * 1000 }))
+}
+
+function primaryCropOf(strategy: RotationStrategy, plot: PlotSnapshot): string {
+  // Strategy A's sequence is sorted by historical year, so its first entry is the OLDEST
+  // season, not the plot's current crop — price it by plot.currentCrop instead.
+  return (strategy.type === 'current' ? plot.currentCrop : strategy.sequence[0]?.crop) ?? plot.currentCrop
+}
+
+interface CropPriceData {
+  priceSnapshot: Awaited<ReturnType<PricesProvider['getSnapshot']>>
+  priceHistory: { priceTon: number }[]
+}
+
+// Fetched once per distinct crop across the whole batch of strategies, not once per strategy —
+// with 7 strategies that used to mean 90+ serial calls for what's really at most a handful of
+// distinct crops (defect (d)).
+async function fetchPriceDataByCrop(
+  crops: string[], municipality: string, asOfDate: string,
+): Promise<Map<string, CropPriceData>> {
+  const distinctCrops = [...new Set(crops)]
+  const entries = await Promise.all(distinctCrops.map(async (crop): Promise<[string, CropPriceData]> => {
+    const [priceSnapshot, priceHistory] = await Promise.all([
+      pricesProvider.getSnapshot(crop, municipality, asOfDate),
+      fetchPriceHistory(crop, municipality, 12),
+    ])
+    return [crop, { priceSnapshot, priceHistory }]
+  }))
+  return new Map(entries)
 }
 
 plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
@@ -155,25 +179,23 @@ plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
     }
 
     const asOfDate = daysAgo(0)
+    // 12 points so the 10th-percentile "drop" scenario doesn't collapse to the same index (0)
+    // as the plain minimum "floor" uses when the plot is too large for the guaranteed-price
+    // floor — floor(0.1 * (n-1)) only moves off index 0 once n >= 11.
+    const priceDataByCrop = await fetchPriceDataByCrop(
+      strategies.map((s) => primaryCropOf(s, plot)), plot.municipality, asOfDate,
+    )
 
     for (const strategy of strategies) {
-      // Strategy A's sequence is sorted by historical year, so its first entry is the OLDEST
-      // season, not the plot's current crop — price it by plot.currentCrop instead.
-      const primaryCrop = strategy.type === 'current' ? plot.currentCrop : strategy.sequence[0]?.crop
+      const primaryCrop = primaryCropOf(strategy, plot)
       const catalogEntry = catalog.find((c) => c.id === primaryCrop)
+      const { priceSnapshot, priceHistory } = priceDataByCrop.get(primaryCrop)!
 
-      const priceSnapshot = await pricesProvider.getSnapshot(
-        primaryCrop ?? plot.currentCrop, plot.municipality, asOfDate,
-      )
       strategy.evidence.push({
         label: 'Rural average price', value: String(priceSnapshot.ruralAvgPriceKg), unit: 'MXN/kg',
         period: asOfDate, provenance: priceSnapshot.provenance,
       })
 
-      // 12 points so the 10th-percentile "drop" scenario doesn't collapse to the same index (0)
-      // as the plain minimum "floor" uses when the plot is too large for the guaranteed-price
-      // floor — floor(0.1 * (n-1)) only moves off index 0 once n >= 11.
-      const priceHistory = await fetchPriceHistory(primaryCrop ?? plot.currentCrop, plot.municipality, 12)
       const scenarioPrices = computeScenarioPrices({ ...priceSnapshot, areaHa: plot.areaHa }, priceHistory)
 
       // The farmer's one business/current record is for a single crop — only apply it to the
@@ -193,7 +215,7 @@ plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
           )
         }
         baseInputs = defaultBusinessInputs(
-          primaryCrop ?? plot.currentCrop, plot.areaHa, catalogEntry ? priceSnapshot.yieldTonHa : 0,
+          primaryCrop, plot.areaHa, catalogEntry ? priceSnapshot.yieldTonHa : 0,
         )
       }
 
@@ -211,9 +233,10 @@ plotsRouter.post('/plots/:id/rotations', async (req, res, next) => {
 
       const averageScenario = strategy.economics.find((e) => e.scenario === 'average')
       if (averageScenario && averageScenario.result.marginPct !== null) {
-        strategy.summary.avgMargin = averageScenario.result.marginPct
+        strategy.summary.avgMarginPct = averageScenario.result.marginPct
+        strategy.summary.avgProfitMxn = averageScenario.result.profit
       } else {
-        strategy.infoGaps.push('Average-scenario margin is undefined — the card summary shows 0 as a placeholder.')
+        strategy.infoGaps.push('Average-scenario margin is undefined — the card summary has no value to show.')
       }
     }
 

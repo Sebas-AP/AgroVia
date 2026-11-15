@@ -45,6 +45,7 @@ describe('combineScores', () => {
       relativeHumidityAvg: 50, frostDays: 0, lastFrostDate: null, heatStressDays: 0,
       growingDegreeDaysAccum: 0, ndviAvg: null, ndviDeviationVsYears: null, bareSoil: null,
       sources: [], asOf: '2026-01-01', engineVersion: '1.0.0',
+      rainfallProvenance: null, moistureAnomalyProvenance: null,
     }
     const staticProfile = {
       slopeDegrees: 5, sandPct: 40, siltPct: 30, clayPct: 30, organicCarbon: 1.5, pH: 7, cec: 15,

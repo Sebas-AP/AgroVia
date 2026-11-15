@@ -55,12 +55,20 @@ export function computeScenarioPrices(
   const history = priceHistory.map((p) => p.priceTon)
   const qualifiesForFloor = crop.areaHa <= SMALL_PRODUCER_LIMIT_HA && crop.guaranteedPriceTon !== null
 
+  const floor = qualifiesForFloor
+    ? crop.guaranteedPriceTon
+    : (history.length > 0 ? Math.min(...history) : null)
+  const historicalDrop = history.length > 0 ? percentile(history, DROP_PERCENTILE) : null
+  // `floor`, where it applies, is a price guarantee: the farmer cannot realize less than it even
+  // in the worst-case scenario, so `drop` must never fall below it. In the non-qualifying branch
+  // this already holds (floor is the history's own min, <= any percentile of that same history);
+  // this clamp is the one that matters when the guaranteed price applies.
+  const drop = floor === null ? historicalDrop : Math.max(historicalDrop ?? floor, floor)
+
   return {
-    floor: qualifiesForFloor
-      ? crop.guaranteedPriceTon
-      : (history.length > 0 ? Math.min(...history) : null),
+    floor,
     average: crop.ruralAvgPriceKg * 1000,
     optimistic: crop.wholesalePriceKg * 1000 * (1 - discountPct),
-    drop: history.length > 0 ? percentile(history, DROP_PERCENTILE) : null,
+    drop,
   }
 }

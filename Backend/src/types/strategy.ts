@@ -14,7 +14,7 @@ export interface RotationStrategy {
   risks: string[]
   scores: StrategyScores
   totalScore: number
-  summary: { sequenceText: string; shortRationale: string; avgMargin: number }
+  summary: { sequenceText: string; shortRationale: string; avgMarginPct: number | null; avgProfitMxn: number | null }
   engineVersion: string
   catalogVersion: string
   generatedAt: string

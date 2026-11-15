@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, vi } from 'vitest'
 import request from 'supertest'
 import { createApp } from '../../src/app'
 import { getAdminFirestore } from '../../src/firestore/admin'
@@ -6,6 +6,7 @@ import { COLLECTIONS } from '../../src/firestore/collections'
 import { seedCropCatalog } from '../../src/seed/cropCatalog.seed'
 import { seedDemoPlot } from '../../src/seed/demoPlot.seed'
 import { mintIdTokenForUid } from '../helpers/fakeIdToken'
+import { SimulatedPricesProvider } from '../../src/providers/PricesProvider'
 
 let authHeader: string
 
@@ -41,11 +42,12 @@ describe('POST /plots/:id/rotations', () => {
     expect(alternative.risks.length).toBeGreaterThan(0)
   })
 
-  it('computes summary.avgMargin from the average price scenario, not a hardcoded 0', async () => {
+  it('computes summary.avgMarginPct and avgProfitMxn from the average price scenario, not a hardcoded 0', async () => {
     const res = await request(createApp()).post('/plots/demo-guadalupe-victoria/rotations').set('authorization', authHeader).send({})
     const current = res.body.strategies.find((s: { type: string }) => s.type === 'current')
     const averageScenario = current.economics.find((e: { scenario: string }) => e.scenario === 'average')
-    expect(current.summary.avgMargin).toBe(averageScenario.result.marginPct)
+    expect(current.summary.avgMarginPct).toBe(averageScenario.result.marginPct)
+    expect(current.summary.avgProfitMxn).toBe(averageScenario.result.profit)
   })
 
   it('varies the economics across price scenarios instead of collapsing floor/average/drop to one value', async () => {
@@ -71,6 +73,29 @@ describe('POST /plots/:id/rotations', () => {
     expect(current.economics.every((e: { result: { investment: number } }) => e.result.investment >= 0)).toBe(true)
 
     await getAdminFirestore().doc(COLLECTIONS.plotBusinessCurrent('demo-guadalupe-victoria')).delete()
+  })
+
+  it('fetches price history once per distinct crop, not once per strategy', async () => {
+    const spy = vi.spyOn(SimulatedPricesProvider.prototype, 'getSnapshot')
+    const res = await request(createApp()).post('/plots/demo-guadalupe-victoria/rotations').set('authorization', authHeader).send({})
+
+    const distinctCrops = new Set(
+      res.body.strategies.map((s: { type: string; sequence: { crop: string }[] }) =>
+        s.type === 'current' ? 'corn' : s.sequence[0]!.crop),
+    )
+    // 1 snapshot + 12 history points per distinct crop; strictly less than per-strategy (13 *
+    // strategies) would have taken, proving the fetch is keyed by crop, not by strategy.
+    expect(spy.mock.calls.length).toBe(distinctCrops.size * 13)
+    expect(spy.mock.calls.length).toBeLessThan(res.body.strategies.length * 13)
+    spy.mockRestore()
+  })
+
+  it('evidence provenance for climate-derived figures comes from the real provider, not a fixed placeholder', async () => {
+    const res = await request(createApp()).post('/plots/demo-guadalupe-victoria/rotations').set('authorization', authHeader).send({})
+    const current = res.body.strategies.find((s: { type: string }) => s.type === 'current')
+    const rainfall = current.evidence.find((e: { label: string }) => e.label === 'Accumulated rainfall')
+    expect(rainfall.provenance.source).toBe('NASA POWER (simulated)')
+    expect(rainfall.provenance.kind).toBe('historical')
   })
 })
 

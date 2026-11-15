@@ -1,3 +1,5 @@
+import type { Provenance } from './provenance'
+
 export interface PlotPriorities {
   water: number
   income: number
@@ -66,6 +68,11 @@ export interface PlotIndicators {
   ndviDeviationVsYears: number | null
   bareSoil: boolean | null
   sources: string[]
+  // The specific provenance behind the two rotation-engine evidence figures that read from
+  // indicators (accumulated rainfall, moisture anomaly) — null only when that period genuinely
+  // has no climate/soil-moisture data at all, never a fabricated fallback (defect (f)).
+  rainfallProvenance: Provenance | null
+  moistureAnomalyProvenance: Provenance | null
   asOf: string
   engineVersion: string
 }
