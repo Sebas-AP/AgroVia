@@ -22,161 +22,164 @@ This is a hackathon prototype. Authentication is in place, but the public deploy
 
 ---
 
-## Arquitectura
+## System Architecture
 
 ```
 ┌─────────────────────────────────────┐
 │  AppMovil (Android, WebView)        │
-│  Carga un bundle de interfaz web    │
+│  Loads a web UI bundle              │
 └──────────────┬──────────────────────┘
                │ HTTPS
 ┌──────────────▼──────────────────────┐
 │  Backend (Express + TypeScript)     │
-│  · Motor de indicadores             │
-│  · Motor de rotaciones (reglas)     │
-│  · Motor económico                  │
-│  · Persistencia en Firestore        │
+│  · Indicators engine                │
+│  · Crop rotation engine (rules)     │
+│  · Economic engine                  │
+│  · Firestore persistence            │
 └──────┬───────────────────┬──────────┘
        │ Admin SDK         │ HTTP
 ┌──────▼─────────┐  ┌──────▼──────────────────┐
 │   Firestore    │  │  Modelo (FastAPI)       │
 │   + Storage    │  │  · NASA POWER           │
 └────────────────┘  │  · MODIS NDVI (ORNL)    │
-                    │  · Modelo sklearn       │
-                    │  · Catálogo INIFAP      │
+                    │  · sklearn model        │
+                    │  · INIFAP catalog       │
                     └─────────────────────────┘
 ```
 
-**Reparto de responsabilidades:** el Modelo es dueño de los datos externos y de la predicción; el Backend es dueño del estado y de la decisión. La unión ya existe para clima diario, humedad de suelo (derivada del mismo clima), NDVI y precios (con `USE_SIMULATED_PROVIDERS=false` + `MODELO_BASE_URL`); el perfil estático de suelo y los criterios de cultivo para el puntaje de rotación siguen en Firestore/simulados.
+**Separation of responsibilities:** the Model owns external data and predictions, while the Backend owns application state and decision logic. The integration is already in place for daily weather, soil moisture (derived from that weather data), NDVI, and crop prices (with `USE_SIMULATED_PROVIDERS=false` + `MODELO_BASE_URL`); the static soil profile and crop criteria for rotation scoring remain stored in Firestore or mocked).
 
 ---
 
-## Las tres partes
+## The three parts
 
-### `Backend/` — API y motores de decisión
+### `Backend/` — API and Decision Engines
 
-Express sobre TypeScript, con Firestore por Admin SDK. Node 20 o superior.
+Express on TypeScript, using Firestore via the Admin SDK. Requires Node 20 or higher.
 
 ```
 src/
   engines/
-    indicators/   Balance hídrico, lluvia, anomalía de humedad,
-                  temperatura del suelo, suelo desnudo, grados-día,
-                  armonización de resoluciones, imputación
-    rotation/     Generación de estrategias, filtros de compatibilidad, puntaje
-    economics/    Inversión, margen, punto de equilibrio, escenarios de precio
-    via/          Asistente VÍA: intención, plantillas, verificación de cifras, redacción opcional
-  geo/            Validación de polígono, superficie y centroide de la parcela
-  providers/      Interfaces de datos; simulado por defecto, clima/NDVI reales vía Modelo
-  integration/    Cliente del Modelo, mapeo de contratos, IDs de cultivo
-  firestore/      Admin SDK, colecciones, cálculo de celda de cuadrícula
-  middleware/     Autenticación de dueño de parcela y llave de servicio
+    indicators/   Water balance, rainfall, soil moisture anomaly,
+                  soil temperature, bare soil, growing degree days,
+                  resolution harmonization, imputation
+    rotation/     Strategy generation, compatibility filters, scoring
+    economics/    Investment, margin, break-even point, price scenarios
+    via/          VÍA assistant: intent, templates, figure verification, optional copywriting
+    geo/          Polygon validation, plot area and centroid calculation
+  providers/      Data interfaces; mocked by default, live weather/NDVI via Model
+  integration/    Model client, contract mapping, crop IDs
+  firestore/      Admin SDK, collections, grid cell calculation
+  middleware/     Plot owner authentication and service account key
   routes/         health, plots, catalog, prices, internal
-  seed/           Catálogo de cultivos y parcela de demostración
-  types/          Procedencia, estrategia, negocio, documentos de Firestore
-  validators/     Validador de procedencia
+  seed/           Crop catalog and demo plot
+  types/          Provenance, strategy, business logic, Firestore documents
+  validators/     Provenance validator
 ```
 
 Rutas:
 
-| Método | Ruta | Qué hace |
+Routes:
+
+| Method | Route | Description |
 |---|---|---|
-| `GET` | `/health` | Estado del servicio |
-| `GET` | `/plots/:id/indicators` | Indicadores ambientales del periodo |
-| `POST` | `/plots/:id/rotations` | Genera y guarda las estrategias de rotación |
-| `GET` | `/plots/:id/rotations` | Las últimas estrategias calculadas |
-| `POST` | `/plots/:id/economics` | Recalcula con los costos del agricultor |
-| `POST` | `/plots/:id/via/ask` | Asistente VÍA: responde una pregunta con plantillas y evidencia verificada |
-| `GET` | `/catalog/crops` | Catálogo de cultivos con sus criterios |
-| `GET` | `/prices/:crop` | Precios por cultivo |
-| — | `/internal/*` | Ingesta, validación y dataset. Requiere llave de servicio |
+| `GET` | `/health` | Service health status |
+| `GET` | `/plots/:id/indicators` | Environmental indicators for the period |
+| `POST` | `/plots/:id/rotations` | Generates and saves crop rotation strategies |
+| `GET` | `/plots/:id/rotations` | Latest calculated strategies |
+| `POST` | `/plots/:id/economics` | Recalculates using the farmer's input costs |
+| `POST` | `/plots/:id/via/ask` | VÍA assistant: answers questions using templates and verified evidence |
+| `GET` | `/catalog/crops` | Crop catalog with agronomic criteria |
+| `GET` | `/prices/:crop` | Prices by crop |
+| — | `/internal/*` | Data ingestion, validation, and dataset endpoints. Requires a service account key |
 
-Escenarios de precio: `floor` (piso de garantía), `average` (precio medio rural), `optimistic` (mayoreo menos intermediación), `drop` (percentil bajo del histórico).
+Price scenarios: `floor` (guaranteed minimum price), `average` (rural average price), `optimistic` (wholesale minus brokerage/intermediation), `drop` (lower historical percentile).
 
-### `Modelo/` — Datos de NASA y predicción
+### `Model/` — NASA Data and Predictions
 
-Python con FastAPI y scikit-learn.
+Python whit FastAPI and scikit-learn.
 
 ```
 agrovia_api/
-  clients/nasa_power.py   Cliente de NASA POWER
-  clients/ornl_modis.py   Cliente de MODIS NDVI (ORNL DAAC)
-  geo.py                  Detección de municipio por coordenada
-  catalogs.py             Catálogo de cultivos del INIFAP
-  agronomy.py             Evaluación agronómica por reglas
-  model_runner.py         Adaptador del pipeline entrenado
-  service.py              Composición de la evaluación
-  schemas.py              Contratos de entrada y salida
-  main.py                 Aplicación FastAPI
+  clients/nasa_power.py   NASA POWER client
+  clients/ornl_modis.py   MODIS NDVI client (ORNL DAAC)
+  geo.py                  Municipality detection by coordinates
+  catalogs.py             INIFAP crop catalog
+  agronomy.py             Rule-based agronomic evaluation
+  model_runner.py         Trained pipeline adapter
+  service.py              Evaluation composition
+  schemas.py              Input and output schemas/contracts
+  main.py                 FastAPI application
 datasets/
   cultivos_inifap.json
   municipios_durango.json
   datasets_cierre_agricola_raw_data/   SIAP 2016-2025
-modelo_agrovia.joblib     Pipeline entrenado
-train_model.py            Entrenamiento
-clean_siap.py             Limpieza de los datos del SIAP
-fetch_historical_nasa.py  Descarga del histórico de NASA
+modelo_agrovia.joblib     Trained pipeline
+train_model.py            Model training
+clean_siap.py             SIAP data cleaning
+fetch_historical_nasa.py  Historical NASA data downloader
 ```
 
-Rutas:
+Routes:
 
-| Método | Ruta | Qué hace |
+| Method | Route | Description |
 |---|---|---|
-| `GET` | `/health` | Estado y versión |
-| `POST` | `/api/v1/evaluar-parcela` | Evalúa un perfil de parcela completo |
-| `GET` | `/api/v1/evaluar-parcela/ejemplo` | Evalúa la parcela de ejemplo incluida |
-| `POST` | `/api/v1/clima` | Agregado de clima de una ventana |
-| `POST` | `/api/v1/clima/diario` | Serie diaria real de NASA POWER (solo días con dato) |
-| `POST` | `/api/v1/ndvi` | Serie NDVI de una ventana |
-| `POST` | `/api/v1/predecir` | Corre el modelo sobre variables ya resueltas |
-| `GET` | `/api/v1/municipio` | Municipio más cercano a una coordenada |
-| `GET` | `/api/v1/cultivos` | Catálogo INIFAP |
+| `GET` | `/health` | Service status and version |
+| `POST` | `/api/v1/evaluar-parcela` | Evaluates a full plot profile |
+| `GET` | `/api/v1/evaluar-parcela/ejemplo` | Evaluates the bundled sample plot |
+| `POST` | `/api/v1/clima` | Aggregated weather data over a time window |
+| `POST` | `/api/v1/clima/diario` | Live daily time series from NASA POWER (days with available data only) |
+| `POST` | `/api/v1/ndvi` | NDVI time series over a time window |
+| `POST` | `/api/v1/predecir` | Runs the model on pre-resolved features/variables |
+| `GET` | `/api/v1/municipio` | Nearest municipality to given coordinates |
+| `GET` | `/api/v1/cultivos` | INIFAP crop catalog |
 
-**El modelo:** `Pipeline` de scikit-learn, clasificador binario de éxito de cosecha, con 8 variables de entrada:
+**The model:** A scikit-learn `Pipeline` binary classifier for harvest success, using 8 input features:
 
 ```
 cultivo_id, modalidad, cve_mun, lluvia_ciclo_mm,
 temp_media_c, temp_max_c, temp_min_extrema_c, radiacion_mj_m2
 ```
 
-La probabilidad se traduce a tres niveles: `alto` (≥ 0.66), `medio` (≥ 0.33) y `bajo`.
+The output probability is mapped into three risk/confidence tiers: `alto` (high, ≥ 0.66), `medio` (medium, ≥ 0.33), and `bajo` (low).
 
-Documentación técnica detallada en `Modelo/DOCUMENTACION_TECNICA_MODELO.md`.
+Detailed technical documentation is available in `Modelo/DOCUMENTACION_TECNICA_MODELO.md`.
 
-### `AppMovil/` — Aplicación Android
+### `AppMovil/` — Android Application
 
-`AppMovil/AgroViaAndroid/agrovia-figma-android-/` es un proyecto Gradle con una sola actividad que abre un `WebView` y carga la interfaz desde `app/src/main/assets/www/`.
+`AppMovil/AgroViaAndroid/agrovia-figma-android-/` is a single-activity Gradle project that opens a `WebView` and loads the UI bundle from `app/src/main/assets/www/`.
 
-La interfaz tiene tres módulos y una pantalla de inicio:
+The interface consists of a home screen and three core modules:
 
-- **Mi parcela** — registro, mapa, eventos e historial de temporadas.
-- **Inteligencia** — indicadores ambientales, comparación de rotaciones y el asistente VÍA.
-- **Mercado** — tendencia de precios, compradores y modelo de negocio con punto de equilibrio.
+- **My Plot** — plot registration, map view, logged events, and seasonal history.
+- **Intelligence** — environmental indicators, crop rotation comparisons, and the VÍA assistant.
+- **Market** — price trends, buyers, and a business model calculator with break-even analysis.
 
-Permisos que pide: internet, ubicación y micrófono (para la entrada por voz de VÍA).
+Requested permissions: internet, location, and microphone (for VÍA voice input).
 
 ---
 
 ## Cómo correrlo
 
-### Requisitos
-- Node.js 20 o superior
-- Python 3.12 o superior
-- JDK 17 y el SDK de Android
-- Un proyecto de Firebase con Firestore
-- Una cuenta de NASA Earthdata, gratuita, para los datos de MODIS
+## Getting Started
+
+### Prerequisites
+- Node.js 20 or higher
+- Python 3.12 or higher
+- JDK 17 and the Android SDK
+- A Firebase project with Firestore enabled
+- A free NASA Earthdata account for MODIS data access
 
 ### Backend
 
 ```bash
 cd Backend
 npm ci
-cp .env.example .env     # completa los valores
-npm run seed             # catálogo de cultivos y parcela de demostración
-npm test                 # 32 archivos de prueba (requieren los emuladores de Firestore y Auth)
+cp .env.example .env     # fill in the environment variables
+npm run seed             # crop catalog and demo plot
+npm test                 # 32 test suites (requires Firestore and Auth emulators)
 npm run lint
 npm run build
-```
 
 Para correr las pruebas con los emuladores, desde la raíz:
 
@@ -184,29 +187,25 @@ Para correr las pruebas con los emuladores, desde la raíz:
 npx firebase-tools emulators:exec --only firestore,auth --project agrovia-ci "cd Backend && npm test"
 ```
 
-Las reglas e índices de Firestore están en `Backend/firestore.rules` y `Backend/firestore.indexes.json`. Despliégalos con la CLI de Firebase desde la raíz, donde están `firebase.json` y `.firebaserc`.
+Firestore security rules and indexes are located in `Backend/firestore.rules` and `Backend/firestore.indexes.json`. Deploy them using the Firebase CLI from the repository root, where `firebase.json` and `.firebaserc` are located.
 
-### Modelo
+### Model
 
 ```bash
 cd Modelo
 pip install -r requirements.txt
 pytest
 uvicorn agrovia_api.main:app --reload
-```
 
 Prueba rápida de la API, con el servicio arriba:
 
-```bash
 curl http://localhost:8000/api/v1/evaluar-parcela/ejemplo
-```
 
-Prueba del modelo sin levantar la API:
+Model testing without starting the API:
 
 ```bash
 python probar_modelo.py
 python test_escenarios_modelo.py
-```
 
 ### AppMovil
 
@@ -222,35 +221,35 @@ the app. Individual steps are available as separate tasks; the underlying script
 
 ---
 
-## Datos
+## Data
 
-### Fuentes de NASA
+### NASA Data Sources
 
-| Fuente | Variables | Resolución |
+| Source | Variables | Resolution |
 |---|---|---|
-| **NASA POWER** | `T2M`, `T2M_MAX`, `T2M_MIN`, `RH2M`, `PRECTOTCORR`, `GWETTOP`, `GWETROOT`, `GWETPROF`, `TS`, `ALLSKY_SFC_SW_DWN`, `WS2M` | ~0.5° × 0.625°, diaria desde 1981 |
-| **SMAP SPL4SMGP** | `sm_surface`, `sm_rootzone`, `sm_rootzone_pctl`, `soil_temp_layer1` | 9 km, cada 3 horas desde 2015 |
-| **GPM IMERG** | Precipitación estimada | 0.1° (~10 km), diaria desde 2000 |
-| **MODIS MOD13Q1** | NDVI, EVI y banda de calidad | 250 m, cada 16 días |
-| **SRTM / NASADEM** | Elevación, de la que se calcula la pendiente | ~30 m, estático |
+| **NASA POWER** | `T2M`, `T2M_MAX`, `T2M_MIN`, `RH2M`, `PRECTOTCORR`, `GWETTOP`, `GWETROOT`, `GWETPROF`, `TS`, `ALLSKY_SFC_SW_DWN`, `WS2M` | ~0.5° × 0.625°, daily since 1981 |
+| **SMAP SPL4SMGP** | `sm_surface`, `sm_rootzone`, `sm_rootzone_pctl`, `soil_temp_layer1` | 9 km, every 3 hours since 2015 |
+| **GPM IMERG** | Estimated precipitation | 0.1° (~10 km), daily since 2000 |
+| **MODIS MOD13Q1** | NDVI, EVI, and quality band | 250 m, every 16 days |
+| **SRTM / NASADEM** | Elevation, used to derive slope | ~30 m, static |
 
-NASA POWER no requiere cuenta. Las demás usan Earthdata Login. Para extraer series por punto o polígono de MODIS, SMAP, ECOSTRESS y SRTM conviene **AppEEARS**, que devuelve CSV con la banda de calidad en lugar de HDF5 crudo; sus tareas son asíncronas, así que sirve para precargar, no para responder en vivo.
+NASA POWER does not require an account. The remaining sources require an Earthdata Login. To extract point or polygon time series from MODIS, SMAP, ECOSTRESS, and SRTM, **AppEEARS** is recommended, as it returns CSV files with the quality band included rather than raw HDF5 files. Because its tasks run asynchronously, it is suitable for preloading data rather than serving live requests.
 
-### Fuentes complementarias
+### Complementary Sources
 
-- **SoilGrids 250m (ISRIC)** — textura, carbono orgánico, pH, CEC. Global.
-- **FAO GAEZ** — aptitud de cultivos y requerimientos agroclimáticos.
-- **SIAP** — precio medio rural y rendimiento por cultivo y municipio. Datos de 2016 a 2025 en `Modelo/datasets/`.
-- **SNIIM** — precio mayorista diario.
-- **Precios de garantía** — piso para pequeño productor, de las reglas de operación del DOF.
-- **INIFAP** — criterios agronómicos por cultivo.
-- **SMN / CONAGUA, estación 10030** — registros diarios para validar las fuentes satelitales contra observación terrestre.
+- **SoilGrids 250m (ISRIC)** — soil texture, organic carbon, pH, and CEC. Global coverage.
+- **FAO GAEZ** — crop suitability and agro-climatic requirements.
+- **SIAP** — rural average price and yield by crop and municipality. Data from 2016 to 2025 stored in `Modelo/datasets/`.
+- **SNIIM** — daily wholesale prices.
+- **Guaranteed prices** — price floors for smallholder farmers, sourced from DOF operating rules.
+- **INIFAP** — agronomic criteria by crop.
+- **SMN / CONAGUA, Station 10030** — daily weather records used to validate satellite sources against ground-based observations.
 
-### Fuentes que NO sirven para este proyecto
+### Incompatible Data Sources
 
-Estas cubren únicamente Estados Unidos y no devuelven datos de Durango. Si aparecen en notas antiguas, ignóralas: **PRISM**, **Web Soil Survey / SSURGO / gNATSGO (USDA-NRCS)**, **CoCoRaHS**, **USGS Water Data**, **USDA NASS QuickStats** y, en su mayoría, **USDA Ag Data Commons**.
+These sources cover the United States exclusively and return no data for Durango. Disregard them if they appear in older notes: **PRISM**, **Web Soil Survey / SSURGO / gNATSGO (USDA-NRCS)**, **CoCoRaHS**, **USGS Water Data**, **USDA NASS QuickStats**, and, for the most part, **USDA Ag Data Commons**.
 
-Nota sobre SMAP: el producto correcto es **`SPL4SMGP`**. **`SPL1A_RO`** es nivel 1A de radar en modo solo recepción, con sigma naught y telemetría cruda: no contiene humedad del suelo.
+Note on SMAP: the correct product is **`SPL4SMGP`**. **`SPL1A_RO`** is a Level 1A receive-only radar product containing sigma-naught ($\sigma^0$) backscatter and raw telemetry—it does not provide soil moisture data.
 
 ### Indicadores derivados
 
@@ -258,69 +257,65 @@ Lluvia acumulada a 5, 10, 15 y 30 días · días con lluvia · lluvia extrema so
 
 ---
 
-## Principios de diseño
+### Derived Indicators
 
-Estos no son adornos: son el criterio con el que se acepta o se rechaza un cambio.
-
-1. **Nada de datos inventados.** Si una fuente no responde, la respuesta lo dice. No hay promedios silenciosos ni valores por defecto disfrazados de medición.
-2. **Procedencia obligatoria.** Todo dato lleva `source`, `product`, `version`, `asOf`, `latencyDays`, `kind` y `origin`. Un dato sin esos campos es un error, no un dato incompleto.
-3. **Lo simulado se marca** y se distingue de lo real en la respuesta de la API y en la interfaz.
-4. **Explicable.** Cada puntaje se descompone por criterio y peso. Sin caja negra.
-5. **El motor de rotaciones es de reglas con umbrales documentados.** El modelo de aprendizaje automático aporta una variable más al puntaje; no decide por sí solo.
-6. **Reproducible.** Cada indicador y cada estrategia guarda la versión del motor y del catálogo.
-7. **Honesto con los vacíos.** Cada estrategia declara qué información falta y qué riesgos requieren revisión de un agrónomo local.
-8. **Apoya, no reemplaza.** La herramienta nunca se presenta como diagnóstico.
+5-, 10-, 15-, and 30-day cumulative rainfall · rainy days · extreme rainfall above the cell's 95th percentile · dry spells · water balance · soil moisture anomaly · smoothed soil temperature · frost days · heat stress days · accumulated growing degree days · bare soil months · NDVI anomaly vs. previous years · slope.
 
 ---
 
-## Estructura del repositorio
+## Design Principles
 
-```
-AppMovil/          Aplicación Android con WebView
-Backend/           API Express y motores de decisión
-Modelo/            Modelo de aprendizaje automático y clientes de NASA
-assets/            Recursos compartidos
-docs/              Documentación
-scripts/           Utilidades de lint y pruebas de CI
-firebase.json      Configuración de despliegue de Firebase
-requirements.txt   Dependencias de Python de la raíz
-```
+These are not decorative guidelines: they are the acceptance criteria used to approve or reject any change.
 
-Cada parte tiene su propio `CLAUDE.md` y `AGENTS.md` con las convenciones que le aplican.
+1. **No fabricated data.** If a data source fails to respond, the response explicitly states it. There are no silent averages or default fallback values disguised as actual measurements.
+2. **Mandatory provenance.** Every data point carries `source`, `product`, `version`, `asOf`, `latencyDays`, `kind`, and `origin`. Data missing any of these fields is treated as an error, not an incomplete record.
+3. **Mocked data is explicitly flagged** and distinguished from live/real data in both the API response and the user interface.
+4. **Explainable.** Every score breaks down transparently by criterion and weight—no black boxes.
+5. **The rotation engine is rule-based with documented thresholds.** The machine learning model contributes just one additional variable to the overall score; it never makes decisions on its own.
+6. **Reproducible.** Every indicator and strategy stores the exact version of both the engine and the crop catalog used to generate it.
+7. **Transparent about data gaps.** Every strategy explicitly states what information is missing and which risks require review by a local agronomist.
+8. **Decision support, not replacement.** The tool is never presented as a definitive agronomic diagnosis.
 
-### Integración continua
+---
 
-Tres workflows en `.github/workflows/`, cada uno activado por cambios en su carpeta: `backend-ci.yml` (Node, eslint y vitest), `modelo-ci.yml` (Python, ruff y pytest) y `appmovil-ci.yml`.
+## Repository Structure
 
-Hay un gancho de pre-comisión en `.githooks/pre-commit`. Actívalo con:
-
+```text
+AppMovil/          Android application with WebView
+Backend/           Express API and decision engines
+Modelo/            Machine learning model and NASA data clients
+assets/            Shared assets
+docs/              Documentation
+scripts/           Linting utilities and CI test scripts
+firebase.json      Firebase deployment configuration
+requirements.txt   Root Python dependencies
 ```bash
 git config core.hooksPath .githooks
 ```
 
 ---
 
-## Contribuir
+## Contributing
 
-Lee `CONTRIBUTING.md`. En resumen: una rama por tema, comisiones pequeñas, pruebas que acompañen cada cambio de comportamiento, y nunca credenciales en el repositorio.
-
----
-
-## Limitaciones conocidas
-
-- **Proveedores simulados por defecto.** Clima, humedad de suelo, NDVI y precios pueden ser reales (`USE_SIMULATED_PROVIDERS=false` + `MODELO_BASE_URL`, los cuatro cambian juntos), pero **el perfil estático de suelo (textura, pendiente) y el catálogo de criterios de cultivo para el puntaje de rotación siguen simulados/sembrados a mano** en toda configuración — no hay cliente de SoilGrids/SRTM, y el catálogo INIFAP del Modelo no tiene los campos que el motor de rotación necesita. Cada dato declara `provenance.origin` (`real`/`simulated`/`demo`) y la interfaz debe respetarlo. El detalle del contrato pendiente está en `INTEGRACION_FASE2.md`.
-- **La app no consume el backend.** La interfaz sirve datos de demostración.
-- **VÍA no es un modelo de lenguaje.** Responde por plantillas deterministas y verifica que toda cifra tenga evidencia. Preguntas fuera de las intenciones soportadas reciben `intent: "unknown"` sin cifras. La redacción opcional con IA está desactivada por defecto (requiere `ANTHROPIC_API_KEY` y `VIA_POLISH_MODEL`) y nunca puede introducir números nuevos.
-- **VÍA describe lo registrado, no pronostica.** No hay modelo de pronóstico: una pregunta sobre "mañana" se responde con la serie climática observada de la ventana analizada, no con una predicción.
-- **El polígono es opcional y no corrige el área declarada.** Si la superficie calculada difiere de `areaHa` más de 10 %, se reporta un `infoGap`; el área declarada nunca se sobrescribe. El cálculo asume parcelas pequeñas, no polares y sin cruzar el antimeridiano.
-- **La resolución satelital es mucho mayor que una parcela.** Una celda de SMAP mide 9 km y una de NASA POWER unos 50 km. Los indicadores son contexto regional, no medición de la parcela, y la interfaz debe decirlo.
-- **No hay sensores de campo.** El dispositivo con ESP32 se descartó por su baja viabilidad para el agricultor; las variables de suelo provienen del historial satelital.
-- **Los datos satelitales tienen latencia.** La corrida *Final* de GPM IMERG tarda meses; para fechas recientes se usa *Late*, que es menos precisa. La latencia real de NASA POWER no la expone el Modelo: la procedencia usa `latencyDays: 0` como marcador, no como medición.
+Read `CONTRIBUTING.md`. In short: one branch per topic, small commits, tests accompanying every behavioral change, and never commit credentials to the repository.
 
 ---
 
-## Créditos y atribución
+## Known Limitations
 
-Datos de NASA POWER: «These data were obtained from the NASA Langley Research Center POWER Project funded through the NASA Earth Science Directorate Applied Science Program.»
+- **Mocked providers by default.** Weather, soil moisture, NDVI, and crop prices can use live data (`USE_SIMULATED_PROVIDERS=false` + `MODELO_BASE_URL`—all four switch together), but **the static soil profile (texture, slope) and the crop criteria catalog for rotation scoring remain mocked/manually seeded** in all configurations—there is no SoilGrids/SRTM client yet, and the Model's INIFAP catalog lacks the fields required by the rotation engine. Every data point declares `provenance.origin` (`real`/`simulated`/`demo`), which the UI must honor. Details on the pending contract are available in `INTEGRACION_FASE2.md`.
+- **The mobile app does not yet consume the backend.** The UI currently serves demo data.
+- **VÍA is not a large language model (LLM).** It responds using deterministic templates and verifies that every figure is backed by evidence. Questions outside supported intents return `intent: "unknown"` with no numbers. Optional AI phrasing/polishing is disabled by default (requires `ANTHROPIC_API_KEY` and `VIA_POLISH_MODEL`) and can never introduce new figures.
+- **VÍA describes recorded data; it does not forecast.** There is no weather forecasting model: a question about "tomorrow" is answered using the observed climate time series from the analyzed window, not a prediction.
+- **The plot polygon is optional and does not override the declared area.** If the calculated surface area differs from `areaHa` by more than 10%, an `infoGap` is reported; the declared area is never overwritten. The calculation assumes small, non-polar plots that do not cross the antimeridian.
+- **Satellite resolution is much coarser than an individual plot.** A SMAP grid cell measures 9 km across, and a NASA POWER cell measures roughly 50 km. Indicators represent regional context rather than plot-level measurements, and the UI must clearly state this.
+- **No in-field hardware sensors.** The ESP32-based sensor device was ruled out due to low adoption feasibility for farmers; all soil variables are derived from historical satellite records.
+- **Satellite data has latency.** The GPM IMERG *Final* run takes months to release; for recent dates, the *Late* run is used, which is less accurate. Actual NASA POWER latency is not exposed by the Model: provenance uses `latencyDays: 0` as a placeholder rather than an actual measurement.
 
-NDVI de MODIS distribuido por el ORNL DAAC. Humedad del suelo de SMAP y precipitación de GPM distribuidas por los DAAC de la NASA. Propiedades de suelo de SoilGrids (ISRIC, CC BY 4.0). Aptitud de cultivos de FAO GAEZ. Estadística agrícola y precios del SIAP y el SNIIM. Criterios agronómicos del INIFAP. Registros climatológicos del SMN/CONAGUA.
+---
+
+## Credits and Attribution
+
+NASA POWER data: "These data were obtained from the NASA Langley Research Center POWER Project funded through the NASA Earth Science Directorate Applied Science Program."
+
+MODIS NDVI distributed by ORNL DAAC. SMAP soil moisture and GPM precipitation distributed by NASA DAACs. Soil properties from SoilGrids (ISRIC, CC BY 4.0). Crop suitability from FAO GAEZ. Agricultural statistics and market prices from SIAP and SNIIM. Agronomic criteria from INIFAP. Climatological records from SMN/CONAGUA.
