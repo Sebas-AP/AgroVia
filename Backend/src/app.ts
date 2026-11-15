@@ -14,6 +14,20 @@ import { errorHandler } from './middleware/errorHandler'
 export function createApp(): express.Express {
   const app = express()
   app.use(express.json())
+  // The Android app's WebView serves pages from https://appassets.androidplatform.net, a
+  // different origin than this API — without CORS headers the browser blocks every fetch()
+  // response before the app ever sees it. Every route here already enforces its own
+  // authorization (Bearer token or public-by-design), so allowing any origin is safe.
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*')
+    res.header('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(204)
+      return
+    }
+    next()
+  })
   app.use(healthRouter)
   app.use(plotsRouter)
   app.use(catalogRouter)
