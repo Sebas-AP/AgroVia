@@ -25,3 +25,11 @@ export function computeCellId(lat: number, lon: number, product: GridProduct): s
   const roundedLon = snapToGrid(lon, step.lon)
   return `${product}:${roundedLat.toFixed(5)}:${roundedLon.toFixed(5)}`
 }
+
+// Inverse of computeCellId — the real coordinate of the cell's (already snapped) corner, used
+// by providers that call a point-based API (e.g. Modelo's /api/v1/ndvi) instead of a true
+// per-cell one.
+export function parseCellId(cellId: string): { product: GridProduct; lat: number; lon: number } {
+  const [product, lat, lon] = cellId.split(':')
+  return { product: product as GridProduct, lat: Number(lat), lon: Number(lon) }
+}

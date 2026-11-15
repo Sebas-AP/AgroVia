@@ -9,9 +9,10 @@ import { generateStrategies } from '../engines/rotation'
 import { computeEconomicResult, computeScenarioPrices } from '../engines/economics'
 import { SimulatedClimateProvider } from '../providers/ClimateProvider'
 import { SimulatedSoilMoistureProvider } from '../providers/SoilMoistureProvider'
-import { SimulatedNdviProvider } from '../providers/NdviProvider'
+import { SimulatedNdviProvider, ModeloNdviProvider, type NdviProvider } from '../providers/NdviProvider'
 import { SimulatedSoilProvider } from '../providers/SoilProvider'
 import { SimulatedPricesProvider, type PricesProvider } from '../providers/PricesProvider'
+import { ModeloClient } from '../integration/modeloClient'
 import type { PlotSnapshot, CropCatalogEntry } from '../types/firestoreDocs'
 import type { BusinessInputs } from '../types/business'
 import type { RotationStrategy } from '../types/strategy'
@@ -22,9 +23,19 @@ plotsRouter.use('/plots/:id', plotOwnerAuth)
 
 const climateProvider = new SimulatedClimateProvider()
 const soilMoistureProvider = new SimulatedSoilMoistureProvider()
-const ndviProvider = new SimulatedNdviProvider()
 const soilProvider = new SimulatedSoilProvider()
 const pricesProvider = new SimulatedPricesProvider()
+
+// USE_SIMULATED_PROVIDERS=false switches NDVI to the real Modelo-backed provider once
+// MODELO_BASE_URL is set. Climate and crop-criteria stay simulated regardless — see
+// INTEGRACION.md for the documented contract gaps (Modelo's /clima is a window aggregate, not
+// a daily series the indicators engine could use without fabricating values; its INIFAP
+// catalogue doesn't carry the rotation-scoring fields cropCatalog needs). Never silently
+// decided here: this file just reflects what's actually implemented.
+const useSimulatedProviders = process.env.USE_SIMULATED_PROVIDERS !== 'false'
+const ndviProvider: NdviProvider = (!useSimulatedProviders && process.env.MODELO_BASE_URL)
+  ? new ModeloNdviProvider(new ModeloClient({ baseUrl: process.env.MODELO_BASE_URL }))
+  : new SimulatedNdviProvider()
 
 async function getPlotOrThrow(id: string): Promise<PlotSnapshot> {
   const doc = await getAdminFirestore().collection(COLLECTIONS.plots).doc(id).get()

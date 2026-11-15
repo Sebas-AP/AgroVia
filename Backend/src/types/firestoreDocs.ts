@@ -31,6 +31,12 @@ export interface PlotSnapshot {
   origin: 'real' | 'demo'
   createdAt: string
   updatedAt: string
+  // Not yet collected from the farmer anywhere in this build — optional until a form field
+  // exists for them. Needed only by the Modelo integration mapper
+  // (integration/modeloMapper.ts), which throws a clear error rather than inventing a value
+  // when either is missing for a plot it's asked to map.
+  terrainType?: string
+  growthStage?: string
 }
 
 export interface StrategyScores {
