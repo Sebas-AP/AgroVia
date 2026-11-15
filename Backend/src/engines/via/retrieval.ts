@@ -40,7 +40,9 @@ export async function retrieveCropNotes(
     || crop.cultivo_id === currentCrop,
   )
   const picks = matches.length > 0 ? matches : catalog.slice(0, 3)
-  return picks
+  const result = picks
     .map((crop) => `${crop.nombre} (ciclo ${crop.duracion_ciclo_dias.join('-')} días, ${crop.modalidad_recomendada.join('/')}): ${crop.notas_tecnicas}`)
     .join('\n')
+  console.warn(`[via-rag] catalog=${catalog.length} picks=${picks.length} contextLen=${result.length}`)
+  return result
 }
