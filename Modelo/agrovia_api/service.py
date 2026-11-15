@@ -16,7 +16,7 @@ from .agronomy import (
 from .cache import TTLCache
 from .catalogs import load_crops, load_municipalities
 from .clients.nasa_power import ClimateAggregate, NasaPowerClient
-from .clients.ornl_modis import NDVISeries, OrnlMODISClient
+from .clients.ornl_modis import NDVISeries, OrnlMODISClient, OrnlMODISError
 from .config import CLIMATE_CACHE_TTL_SECONDS, MODEL_PATH, NDVI_CACHE_TTL_SECONDS
 from .errors import InvalidCropError, InvalidModalityError, InvalidParcelError
 from .geo import nearest_municipality
@@ -29,6 +29,7 @@ from .schemas import (
     EvaluacionModelo,
     MunicipioDetectado,
     ParcelaInput,
+    PrediccionInput,
     PuntajeVariable,
     PuntoNDVI,
     RespuestaEvaluacion,
@@ -158,15 +159,7 @@ class AgroViaService:
                 municipio=str(municipality["municipio"]),
                 distancia_km=round(distance_km, 2),
             ),
-            cultivo=CultivoInfo(
-                cultivo_id=crop_id,
-                nombre=crop.get("nombre", crop_id),
-                familia=crop.get("familia", "desconocida"),
-                ciclo_principal=crop.get("ciclo_principal", "desconocido"),
-                modalidad_recomendada=list(crop.get("modalidad_recomendada", [])),
-                duracion_ciclo_dias=cycle_days,
-                notas_tecnicas=crop.get("notas_tecnicas", ""),
-            ),
+            cultivo=self._crop_info(crop_id, crop, cycle_days),
             ventana_analisis=VentanaAnalisis(
                 inicio=window_start,
                 fin=window_end,
@@ -205,7 +198,7 @@ class AgroViaService:
         longitude: float,
         start: date,
         end: date,
-        warnings: list[str],
+        warnings: list[str] | None = None,
     ) -> ClimateAggregate:
         key = self._window_key(latitude, longitude, start, end)
         cached = self._climate_cache.get(key)
@@ -218,54 +211,58 @@ class AgroViaService:
             # for this exact (lat, lon, window) only if one actually exists; never fabricate one.
             stale = self._climate_cache.get_stale(key)
             if stale is not None:
-                warnings.append(
-                    "No se pudo consultar NASA POWER; se usó el último clima en caché para "
-                    "esta coordenada y ventana."
-                )
+                if warnings is not None:
+                    warnings.append(
+                        "No se pudo consultar NASA POWER; se usó el último clima en caché para "
+                        "esta coordenada y ventana."
+                    )
                 return stale
             raise
         self._climate_cache.set(key, climate)
         return climate
 
-    def _fetch_ndvi(
+    def _fetch_ndvi_series(
         self,
         latitude: float,
         longitude: float,
         start: date,
         end: date,
-        warnings: list[str],
-    ) -> NDVIMODIS | None:
+        warnings: list[str] | None = None,
+    ) -> NDVISeries | None:
+        """NDVI client call behind the cache, with the same stale-fallback-on-failure shape as
+        _fetch_climate. Returns None only when the client failed AND nothing is cached — a
+        successful call with zero observations still returns a (empty) NDVISeries, which is
+        real data, not a failure."""
         key = self._window_key(latitude, longitude, start, end)
         series = self._ndvi_cache.get(key)
-        if series is None:
-            try:
-                series = self._ndvi_client.fetch_ndvi(latitude, longitude, start, end)
-                self._ndvi_cache.set(key, series)
-            except Exception as exc:  # noqa: BLE001 - NDVI is supplementary
-                stale = self._ndvi_cache.get_stale(key)
-                if stale is not None:
-                    series = stale
+        if series is not None:
+            return series
+        try:
+            series = self._ndvi_client.fetch_ndvi(latitude, longitude, start, end)
+        except Exception as exc:  # noqa: BLE001 - NDVI is supplementary
+            stale = self._ndvi_cache.get_stale(key)
+            if stale is not None:
+                if warnings is not None:
                     warnings.append(
                         f"No se pudo consultar NDVI de ORNL DAAC ({exc}); se usó el último "
                         "NDVI en caché para esta coordenada y ventana."
                     )
-                else:
-                    warnings.append(
-                        f"No se pudo consultar NDVI de ORNL DAAC ({exc}); "
-                        "la evaluación continúa sin este indicador."
-                    )
-                    return None
-
-        if series.count == 0:
-            warnings.append(
-                "ORNL DAAC no devolvió compuestos NDVI para la ventana solicitada."
-            )
+                return stale
+            if warnings is not None:
+                warnings.append(
+                    f"No se pudo consultar NDVI de ORNL DAAC ({exc}); "
+                    "la evaluación continúa sin este indicador."
+                )
             return None
+        self._ndvi_cache.set(key, series)
+        return series
 
+    @staticmethod
+    def _ndvi_response(series: NDVISeries, start: date, end: date, ndvi_client: OrnlMODISClient) -> NDVIMODIS:
         return NDVIMODIS(
             fuente="ORNL DAAC MODIS/VIIRS Land Products Web Service",
-            producto=self._ndvi_client.product,
-            banda=self._ndvi_client.band,
+            producto=ndvi_client.product,
+            banda=ndvi_client.band,
             ventana_inicio=start,
             ventana_fin=end,
             n_observaciones=series.count,
@@ -277,6 +274,105 @@ class AgroViaService:
                 PuntoNDVI(fecha=observation.fecha, ndvi=observation.ndvi)
                 for observation in series.observations
             ],
+        )
+
+    def _fetch_ndvi(
+        self,
+        latitude: float,
+        longitude: float,
+        start: date,
+        end: date,
+        warnings: list[str],
+    ) -> NDVIMODIS | None:
+        series = self._fetch_ndvi_series(latitude, longitude, start, end, warnings)
+        if series is None:
+            return None
+        if series.count == 0:
+            warnings.append(
+                "ORNL DAAC no devolvió compuestos NDVI para la ventana solicitada."
+            )
+            return None
+        return self._ndvi_response(series, start, end, self._ndvi_client)
+
+    def fetch_climate_window(
+        self, latitud: float, longitud: float, inicio: date, fin: date,
+    ) -> ClimaNASA:
+        """Narrow route backing POST /api/v1/clima — same cache as the composite evaluation."""
+        climate = self._fetch_climate(latitud, longitud, inicio, fin)
+        return ClimaNASA(
+            fuente="NASA POWER daily point (community AG)",
+            ventana_inicio=inicio,
+            ventana_fin=fin,
+            n_dias=climate.n_dias,
+            lluvia_ciclo_mm=climate.lluvia_ciclo_mm,
+            temp_media_c=climate.temp_media_c,
+            temp_max_c=climate.temp_max_c,
+            temp_min_extrema_c=climate.temp_min_extrema_c,
+            radiacion_mj_m2=climate.radiacion_mj_m2,
+        )
+
+    def fetch_ndvi_window(
+        self, latitud: float, longitud: float, inicio: date, fin: date,
+    ) -> NDVIMODIS:
+        """Narrow route backing POST /api/v1/ndvi. Unlike the composite path's silent
+        degrade-to-None, a genuine upstream failure with nothing cached raises OrnlMODISError
+        (mapped to 502 in main.py) rather than returning an empty-looking success; a real empty
+        result (zero observations) still returns normally."""
+        series = self._fetch_ndvi_series(latitud, longitud, inicio, fin)
+        if series is None:
+            raise OrnlMODISError(
+                "ORNL DAAC could not be reached and no cached NDVI exists for this window"
+            )
+        return self._ndvi_response(series, inicio, fin, self._ndvi_client)
+
+    def predict_from_features(self, payload: PrediccionInput) -> EvaluacionModelo:
+        """Narrow route backing POST /api/v1/predecir — runs the trained model directly on an
+        already-resolved feature set, without re-deriving cultivo_id/modalidad from raw strings
+        the way evaluate() does."""
+        features = {
+            "cultivo_id": payload.cultivo_id,
+            "modalidad": payload.modalidad,
+            "cve_mun": payload.cve_mun,
+            "lluvia_ciclo_mm": payload.lluvia_ciclo_mm,
+            "temp_media_c": payload.temp_media_c,
+            "temp_max_c": payload.temp_max_c,
+            "temp_min_extrema_c": payload.temp_min_extrema_c,
+            "radiacion_mj_m2": payload.radiacion_mj_m2,
+        }
+        probability, predicted_class = self._model_runner.predict(features)
+        return EvaluacionModelo(
+            modelo=self._model_runner.model_path.name,
+            probabilidad_exito=round(probability, 4),
+            clase_predicha=predicted_class,
+            clasificacion=classify_probability(probability),
+        )
+
+    def detect_municipality(self, latitud: float, longitud: float) -> MunicipioDetectado:
+        """Narrow route backing GET /api/v1/municipio."""
+        municipality, distance_km = nearest_municipality(latitud, longitud, self._municipalities)
+        return MunicipioDetectado(
+            cve_mun=int(municipality["cve_mun"]),
+            municipio=str(municipality["municipio"]),
+            distancia_km=round(distance_km, 2),
+        )
+
+    def list_crops(self) -> list[CultivoInfo]:
+        """Narrow route backing GET /api/v1/cultivos — the full INIFAP catalogue."""
+        return [
+            self._crop_info(crop_id, crop, [int(d) for d in crop.get("duracion_ciclo_dias", [365, 365])])
+            for crop_id, crop in sorted(self._crops.items())
+        ]
+
+    @staticmethod
+    def _crop_info(crop_id: str, crop: dict[str, Any], cycle_days: list[int]) -> CultivoInfo:
+        return CultivoInfo(
+            cultivo_id=crop_id,
+            nombre=crop.get("nombre", crop_id),
+            familia=crop.get("familia", "desconocida"),
+            ciclo_principal=crop.get("ciclo_principal", "desconocido"),
+            modalidad_recomendada=list(crop.get("modalidad_recomendada", [])),
+            duracion_ciclo_dias=cycle_days,
+            notas_tecnicas=crop.get("notas_tecnicas", ""),
         )
 
     def _score_crop(
